@@ -54,32 +54,17 @@ def list_docker_containers() -> list[ContainerInfo]:
 def get_images_with_containers() -> List[Tuple[ImageInfo, List[ContainerInfo]]]:
     images = list_docker_images()
     containers = list_docker_containers()
+    repo_tag_to_image_id = {f"{img['Repository']}:{img['Tag']}": img['ID'] for img in images}
 
     # Create a mapping from image ID to containers using that image
     image_id_to_containers: dict[str, list[ContainerInfo]] = {}
     for container in containers:
-        image_id = container['Image']
-        if image_id not in image_id_to_containers:
-            image_id_to_containers[image_id] = []
-        image_id_to_containers[image_id].append(container)
-
-    # Map repository:tag to image ID for lookup
-    repo_tag_to_image_id = {f"{img['Repository']}:{img['Tag']}": img['ID'] for img in images}
+        image_ref = container['Image']  # Can be repo:tag or the image ID
+        image_id = repo_tag_to_image_id.get(image_ref, image_ref)
+        image_id_to_containers.setdefault(image_id, []).append(container)
 
     # Create result list with image info and associated containers
-    result: list[Tuple[ImageInfo, List[ContainerInfo]]] = []
-    for img in images:
-        # Get the image ID (either from the image itself or from repo:tag mapping)
-        image_id = img['ID']
-        if image_id in repo_tag_to_image_id:
-            # If we have a repo:tag mapping, use it to get the actual image ID
-            image_id = repo_tag_to_image_id[image_id]
-
-        # Get containers using this image
-        containers_for_image = image_id_to_containers.get(image_id, [])
-        result.append((img, containers_for_image))
-
-    return result
+    return [(img, image_id_to_containers.get(img['ID'], [])) for img in images]
 
 
 def main(stdscr: curses.window):
