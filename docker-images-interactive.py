@@ -67,26 +67,30 @@ def get_images_with_containers() -> List[Tuple[ImageInfo, List[ContainerInfo]]]:
     return [(img, image_id_to_containers.get(img['ID'], [])) for img in images]
 
 
+def left_ellipsis(value: str, sz: int):
+    return ('…' + value[-(sz-1):]) if len(value) > sz else value
+
+
 def main(stdscr: curses.window):
     curses.curs_set(0)
     k = 0
     selected = 0
     confirm_delete = False
-    # Use the new function instead of separate calls
     image_container_pairs = get_images_with_containers()
     while True:
         stdscr.clear()
         stdscr.addstr(0, 0, "Docker Images Browser (q: quit, d: delete)")
-        stdscr.addstr(1, 0, "ID         REPOSITORY      TAG        SIZE      CREATED         USED")
+        stdscr.addstr(1, 0, f"{"ID":12} {"REPOSITORY":32} {"TAG":16} {"SIZE":10} {"CREATED":16} {"USED"}")
         for idx, (img, containers) in enumerate(image_container_pairs):
             marker = '*' if len(containers) > 0 else ' '
-            line = f"{img['ID'][:12]:12} {img['Repository'][:14]:14} {img['Tag'][:10]:10} {img['Size']:10} {img['CreatedSince']:14} {marker}"
+            line = f"{img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {marker}"
             if idx == selected:
                 stdscr.addstr(2+idx, 0, line, curses.A_REVERSE)
             else:
                 stdscr.addstr(2+idx, 0, line)
         if confirm_delete:
-            stdscr.addstr(2+len(image_container_pairs)+1, 0, f"Delete image {image_container_pairs[selected][0]['Repository']}:{image_container_pairs[selected][0]['Tag']}? (y/n)")
+            image = image_container_pairs[selected][0]
+            stdscr.addstr(2+len(image_container_pairs)+1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
         stdscr.refresh()
         k = stdscr.getch()
         if confirm_delete:
