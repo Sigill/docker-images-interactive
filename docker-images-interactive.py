@@ -80,7 +80,7 @@ def main(stdscr: curses.window):
     while True:
         stdscr.clear()
         stdscr.addstr(0, 0, "Docker Images Browser (q: quit, d: delete)")
-        stdscr.addstr(1, 0, f"{"ID":12} {"REPOSITORY":32} {"TAG":16} {"SIZE":10} {"CREATED":16} {"USED"}")
+        stdscr.addstr(1, 0, "ID           REPOSITORY                       TAG              SIZE       CREATED          USED")
         for idx, (img, containers) in enumerate(image_container_pairs):
             marker = '*' if len(containers) > 0 else ' '
             line = f"{img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {marker}"
@@ -93,18 +93,18 @@ def main(stdscr: curses.window):
             stdscr.addstr(2+len(image_container_pairs)+1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
         stdscr.refresh()
         k = stdscr.getch()
-        if confirm_delete:
-            if k in [ord('y'), ord('Y')]:
-                # Only delete if not used
-                img, containers = image_container_pairs[selected]
-                if len(containers) == 0:  # No containers using this image
-                    subprocess.run(['docker', 'rmi', img['ID']])
-                    image_container_pairs = get_images_with_containers()
-                    selected = min(selected, len(image_container_pairs)-1)
-                confirm_delete = False
-            elif k in [ord('n'), ord('N')]:
-                confirm_delete = False
+        if confirm_delete and k in [ord('y'), ord('Y')]:
+            # Only delete if not used
+            img, containers = image_container_pairs[selected]
+            if len(containers) == 0:  # No containers using this image
+                subprocess.run(['docker', 'rmi', img['ID']])
+                image_container_pairs = get_images_with_containers()
+                selected = min(selected, len(image_container_pairs)-1)
+
+            confirm_delete = False
         else:
+            confirm_delete = False
+
             if k == curses.KEY_UP:
                 selected = max(0, selected-1)
             elif k == curses.KEY_DOWN:
