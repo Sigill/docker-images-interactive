@@ -140,7 +140,6 @@ def main(stdscr: curses.window):
         # Initialize color pair 1 for normal text with default foreground and background colors
         curses.init_pair(1, -1, -1)  # -1 means default terminal colors
 
-    k = 0
     selected = 0
     confirm_delete = False
     image_container_pairs = get_images_with_containers()
