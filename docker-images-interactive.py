@@ -93,6 +93,15 @@ def find_best_matching_image(
     return 0
 
 
+def delete_image(img: ImageInfo):
+    if img['Repository'] != '<none>' and img['Tag'] != '<none>':
+        name = f"{img['Repository']}:{img['Tag']}"
+    else:
+        name = img['ID']
+
+    subprocess.run(['docker', 'rmi', name])
+
+
 def main(stdscr: curses.window):
     curses.curs_set(0)
 
@@ -150,7 +159,7 @@ def main(stdscr: curses.window):
             # Only delete if not used
             img, containers = image_container_pairs[selected]
             if len(containers) == 0:  # No containers using this image
-                subprocess.run(['docker', 'rmi', img['ID']])
+                delete_image(img)
                 image_container_pairs = get_images_with_containers()
                 selected = min(selected, len(image_container_pairs)-1)
                 # Adjust scroll offset after deletion
