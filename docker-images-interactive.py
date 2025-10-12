@@ -84,24 +84,45 @@ def main(stdscr: curses.window):
     selected = 0
     confirm_delete = False
     image_container_pairs = get_images_with_containers()
+
+    # Scroll-related variables
+    scroll_offset = 0
+    max_display_lines = 0
+
     while True:
         stdscr.clear()
+        max_y, _ = stdscr.getmaxyx()
+        max_display_lines = max_y - 2  # Reserve 2 lines for header and instructions
+
+        # Calculate scroll offset to keep selected item visible
+        if selected < scroll_offset:
+            scroll_offset = selected
+        elif selected >= scroll_offset + max_display_lines:
+            scroll_offset = selected - max_display_lines + 1
+
+        # Ensure scroll offset is not negative
+        scroll_offset = max(0, scroll_offset)
+
         stdscr.addstr(0, 0, "ID           REPOSITORY                       TAG              SIZE       CREATED          USED")
-        for idx, (img, containers) in enumerate(image_container_pairs):
+
+        # Display only the visible range of images
+        for idx, (img, containers) in enumerate(image_container_pairs[scroll_offset:scroll_offset+max_display_lines]):
+            display_idx = idx + scroll_offset
             marker = '*' if len(containers) > 0 else ' '
             line = f"{img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {marker}"
-            if idx == selected:
+            if display_idx == selected:
                 stdscr.addstr(1+idx, 0, line, curses.A_REVERSE)
             else:
                 stdscr.addstr(1+idx, 0, line)
+
         if confirm_delete:
             image = image_container_pairs[selected][0]
             stdscr.addstr(2+len(image_container_pairs)+1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
 
-        max_y, _ = stdscr.getmaxyx()
         stdscr.addstr(max_y-1, 0, "(q: quit, d: delete)")
         stdscr.refresh()
         k = stdscr.getch()
+
         if confirm_delete and k in [ord('y'), ord('Y')]:
             # Only delete if not used
             img, containers = image_container_pairs[selected]
@@ -109,6 +130,11 @@ def main(stdscr: curses.window):
                 subprocess.run(['docker', 'rmi', img['ID']])
                 image_container_pairs = get_images_with_containers()
                 selected = min(selected, len(image_container_pairs)-1)
+                # Adjust scroll offset after deletion
+                if selected < scroll_offset:
+                    scroll_offset = selected
+                elif selected >= scroll_offset + max_display_lines:
+                    scroll_offset = selected - max_display_lines + 1
 
             confirm_delete = False
         else:
