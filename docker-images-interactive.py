@@ -76,18 +76,20 @@ def find_best_matching_image(
     old_repo: str,
     old_tag: str
 ) -> int:
+    candidates = [(i, img) for i, (img, _) in enumerate(images) if img['ID'] == old_id]
+
     # 1. Same id, repo, tag
-    for i, (img, _) in enumerate(images):
-        if img['ID'] == old_id and img['Repository'] == old_repo and img['Tag'] == old_tag:
+    for i, img in candidates:
+        if img['Repository'] == old_repo and img['Tag'] == old_tag:
             return i
     # 2. Same id, repo
-    for i, (img, _) in enumerate(images):
-        if img['ID'] == old_id and img['Repository'] == old_repo:
+    for i, img in candidates:
+        if img['Repository'] == old_repo:
             return i
     # 3. Same id
-    for i, (img, _) in enumerate(images):
-        if img['ID'] == old_id:
-            return i
+    if len(candidates) > 0:
+        return candidates[0][0]
+
     return 0
 
 
