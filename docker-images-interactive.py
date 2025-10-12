@@ -73,6 +73,13 @@ def left_ellipsis(value: str, sz: int):
 
 def main(stdscr: curses.window):
     curses.curs_set(0)
+
+    if curses.has_colors():
+        curses.start_color()
+        curses.use_default_colors()
+        # Initialize color pair 1 for normal text with default foreground and background colors
+        curses.init_pair(1, -1, -1)  # -1 means default terminal colors
+
     k = 0
     selected = 0
     confirm_delete = False
