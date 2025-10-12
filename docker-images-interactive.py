@@ -3,7 +3,7 @@ import curses
 import subprocess
 import json
 import time
-from typing import TypedDict, List, Tuple
+from typing import Any, TypedDict, List, Tuple
 
 
 # Docker image fields from 'docker images --format {{json .}}'
@@ -32,22 +32,20 @@ class ContainerInfo(TypedDict):
     Mounts: str
 
 
+# Utility function to run a Docker command and parse the JSON output
+def run_docker_command(command: List[str]) -> List[Any]:
+    result = subprocess.run(command, capture_output=True, text=True)
+    return [json.loads(line) for line in result.stdout.strip().split('\n') if line]
+
+
 # Utility to run 'docker images --format {{json .}}' and return list of ImageInfo
 def list_docker_images() -> list[ImageInfo]:
-    result = subprocess.run([
-        'docker', 'images', '--format', '{{json .}}'
-    ], capture_output=True, text=True)
-
-    return [json.loads(line) for line in result.stdout.strip().split('\n') if line]
+    return run_docker_command(['docker', 'images', '--format', '{{json .}}'])
 
 
 # Utility to run 'docker ps -a --format {{json .}}' and return list of ContainerInfo
 def list_docker_containers() -> list[ContainerInfo]:
-    result = subprocess.run([
-        'docker', 'ps', '-a', '--format', '{{json .}}'
-    ], capture_output=True, text=True)
-
-    return [json.loads(line) for line in result.stdout.strip().split('\n') if line]
+    return run_docker_command(['docker', 'ps', '-a', '--format', '{{json .}}'])
 
 
 # Function that returns list of (ImageInfo, List[ContainerInfo]) tuples
