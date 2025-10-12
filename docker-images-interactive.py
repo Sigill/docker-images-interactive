@@ -71,6 +71,28 @@ def left_ellipsis(value: str, sz: int):
     return ('…' + value[-(sz-1):]) if len(value) > sz else value
 
 
+# Helper to find the best matching image index after refresh
+def find_best_matching_image(
+    images: List[Tuple[ImageInfo, List[ContainerInfo]]],
+    old_id: str,
+    old_repo: str,
+    old_tag: str
+) -> int:
+    # 1. Same id, repo, tag
+    for i, (img, _) in enumerate(images):
+        if img['ID'] == old_id and img['Repository'] == old_repo and img['Tag'] == old_tag:
+            return i
+    # 2. Same id, repo
+    for i, (img, _) in enumerate(images):
+        if img['ID'] == old_id and img['Repository'] == old_repo:
+            return i
+    # 3. Same id
+    for i, (img, _) in enumerate(images):
+        if img['ID'] == old_id:
+            return i
+    return 0
+
+
 def main(stdscr: curses.window):
     curses.curs_set(0)
 
@@ -119,7 +141,7 @@ def main(stdscr: curses.window):
             image = image_container_pairs[selected][0]
             stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
         else:
-            stdscr.addstr(max_y-1, 0, "(q: quit, d: delete)")
+            stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh)")
             stdscr.refresh()
 
         k = stdscr.getch()
@@ -152,6 +174,25 @@ def main(stdscr: curses.window):
                     confirm_delete = True
             elif k == ord('q'):
                 break
+            elif k == ord('r') or k == curses.KEY_F5:  # Refresh
+                old_selected_image = image_container_pairs[selected][0]
+                rel_pos = selected - scroll_offset
+
+                image_container_pairs = get_images_with_containers()
+
+                selected = find_best_matching_image(
+                    image_container_pairs,
+                    old_selected_image['ID'],
+                    old_selected_image['Repository'],
+                    old_selected_image['Tag']
+                )
+
+                # Recompute scroll_offset to keep the selected image at the same relative position
+                scroll_offset = selected - rel_pos
+                if scroll_offset < 0:
+                    scroll_offset = 0
+                elif scroll_offset > max(0, len(image_container_pairs) - max_display_lines):
+                    scroll_offset = max(0, len(image_container_pairs) - max_display_lines)
         time.sleep(0.05)
 
 
