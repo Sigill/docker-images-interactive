@@ -141,7 +141,7 @@ def main(stdscr: curses.window):
             image = image_container_pairs[selected][0]
             stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
         else:
-            stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh)")
+            stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last)")
             stdscr.refresh()
 
         k = stdscr.getch()
@@ -183,6 +183,10 @@ def main(stdscr: curses.window):
                         selected = first_visible
                     else:
                         selected = max(selected - max_display_lines, 0)
+            elif k == ord('g'):  # Select first image
+                selected = 0
+            elif k == ord('G'):  # Select last image
+                selected = len(image_container_pairs) - 1
             elif k == ord('d'):
                 # Only allow delete if not used
                 img, containers = image_container_pairs[selected]
