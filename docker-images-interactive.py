@@ -86,18 +86,20 @@ def main(stdscr: curses.window):
     image_container_pairs = get_images_with_containers()
     while True:
         stdscr.clear()
-        stdscr.addstr(0, 0, "Docker Images Browser (q: quit, d: delete)")
-        stdscr.addstr(1, 0, "ID           REPOSITORY                       TAG              SIZE       CREATED          USED")
+        stdscr.addstr(0, 0, "ID           REPOSITORY                       TAG              SIZE       CREATED          USED")
         for idx, (img, containers) in enumerate(image_container_pairs):
             marker = '*' if len(containers) > 0 else ' '
             line = f"{img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {marker}"
             if idx == selected:
-                stdscr.addstr(2+idx, 0, line, curses.A_REVERSE)
+                stdscr.addstr(1+idx, 0, line, curses.A_REVERSE)
             else:
-                stdscr.addstr(2+idx, 0, line)
+                stdscr.addstr(1+idx, 0, line)
         if confirm_delete:
             image = image_container_pairs[selected][0]
             stdscr.addstr(2+len(image_container_pairs)+1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
+
+        max_y, _ = stdscr.getmaxyx()
+        stdscr.addstr(max_y-1, 0, "(q: quit, d: delete)")
         stdscr.refresh()
         k = stdscr.getch()
         if confirm_delete and k in [ord('y'), ord('Y')]:
