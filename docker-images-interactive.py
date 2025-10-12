@@ -40,12 +40,12 @@ def run_docker_command(command: List[str]) -> List[Any]:
 
 
 # Utility to run 'docker images --format {{json .}}' and return list of ImageInfo
-def list_docker_images() -> list[ImageInfo]:
+def list_docker_images() -> List[ImageInfo]:
     return run_docker_command(['docker', 'images', '--format', '{{json .}}'])
 
 
 # Utility to run 'docker ps -a --format {{json .}}' and return list of ContainerInfo
-def list_docker_containers() -> list[ContainerInfo]:
+def list_docker_containers() -> List[ContainerInfo]:
     return run_docker_command(['docker', 'ps', '-a', '--format', '{{json .}}'])
 
 
@@ -56,7 +56,7 @@ def get_images_with_containers() -> List[Tuple[ImageInfo, List[ContainerInfo]]]:
     repo_tag_to_image_id = {f"{img['Repository']}:{img['Tag']}": img['ID'] for img in images}
 
     # Create a mapping from image ID to containers using that image
-    image_id_to_containers: dict[str, list[ContainerInfo]] = {}
+    image_id_to_containers: dict[str, List[ContainerInfo]] = {}
     for container in containers:
         image_ref = container['Image']  # Can be repo:tag or the image ID
         image_id = repo_tag_to_image_id.get(image_ref, image_ref)
@@ -103,7 +103,7 @@ def delete_image(img: ImageInfo):
     subprocess.run(['docker', 'rmi', name])
 
 
-def filter_images(image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]], keyword: str | None):
+def filter_images(image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]], keyword: str):
     """Filter image pairs based on keyword in repository:tag"""
     if not keyword:
         return image_pairs
