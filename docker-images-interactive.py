@@ -117,10 +117,11 @@ def main(stdscr: curses.window):
 
         if confirm_delete:
             image = image_container_pairs[selected][0]
-            stdscr.addstr(2+len(image_container_pairs)+1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
+            stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
+        else:
+            stdscr.addstr(max_y-1, 0, "(q: quit, d: delete)")
+            stdscr.refresh()
 
-        stdscr.addstr(max_y-1, 0, "(q: quit, d: delete)")
-        stdscr.refresh()
         k = stdscr.getch()
 
         if confirm_delete and k in [ord('y'), ord('Y')]:
