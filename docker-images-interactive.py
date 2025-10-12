@@ -167,6 +167,22 @@ def main(stdscr: curses.window):
                 selected = max(0, selected-1)
             elif k == curses.KEY_DOWN:
                 selected = min(len(image_container_pairs)-1, selected+1)
+            elif k == curses.KEY_NPAGE:  # Page Down
+                if len(image_container_pairs) > 0:
+                    # If not at the last visible item, jump to last visible
+                    last_visible = min(scroll_offset + max_display_lines - 1, len(image_container_pairs) - 1)
+                    if selected != last_visible:
+                        selected = last_visible
+                    else:
+                        selected = min(selected + max_display_lines, len(image_container_pairs) - 1)
+            elif k == curses.KEY_PPAGE:  # Page Up
+                if len(image_container_pairs) > 0:
+                    # If not at the first visible item, jump to first visible
+                    first_visible = scroll_offset
+                    if selected != first_visible:
+                        selected = first_visible
+                    else:
+                        selected = max(selected - max_display_lines, 0)
             elif k == ord('d'):
                 # Only allow delete if not used
                 img, containers = image_container_pairs[selected]
