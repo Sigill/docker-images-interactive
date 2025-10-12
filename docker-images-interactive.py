@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import curses
+from curses import ascii
 import subprocess
 import json
 import time
@@ -141,7 +142,7 @@ def main(stdscr: curses.window):
         curses.init_pair(1, -1, -1)  # -1 means default terminal colors
 
     selected = 0
-    confirm_delete = False
+    confirm_delete_mode = False
     image_container_pairs = get_images_with_containers()
 
     # Scroll-related variables
@@ -190,7 +191,7 @@ def main(stdscr: curses.window):
             stdscr.addstr(max_y-1, 0, "Search: ")
             search_start_x = 8  # Position after "Search: "
             display_editable_text(stdscr, search_keyword, search_cursor_pos, max_y-1, search_start_x)
-        elif confirm_delete:
+        elif confirm_delete_mode:
             image = display_pairs[selected][0]
             stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
         else:
@@ -200,17 +201,17 @@ def main(stdscr: curses.window):
         k = stdscr.getch()
 
         if search_mode:
-            if k == curses.KEY_ENTER or k == 10 or k == 13:
+            if k == curses.KEY_ENTER or k == ascii.CR or k == ascii.LF:
                 # Validate and save the search keyword
                 saved_search_keyword = search_keyword
                 search_mode = False
                 search_cursor_pos = 0
-            elif k == 27:  # ESC key
+            elif k == ascii.ESC:  # ESC key
                 # Cancel search mode
                 search_mode = False
                 search_keyword = ""
                 search_cursor_pos = 0
-            elif k == curses.KEY_BACKSPACE or k == 127 or k == 8:
+            elif k == curses.KEY_BACKSPACE or k == ascii.DEL or k == ascii.BS:
                 # Backspace
                 if search_cursor_pos > 0:
                     search_keyword = search_keyword[:search_cursor_pos-1] + search_keyword[search_cursor_pos:]
@@ -231,8 +232,8 @@ def main(stdscr: curses.window):
                 # Add character to search keyword at cursor position
                 search_keyword = search_keyword[:search_cursor_pos] + chr(k) + search_keyword[search_cursor_pos:]
                 search_cursor_pos += 1
-        else:
-            if confirm_delete and k in [ord('y'), ord('Y')]:
+        elif confirm_delete_mode:
+            if k in [ord('y'), ord('Y')]:
                 # Only delete if not used
                 img, containers = image_container_pairs[selected]
                 if len(containers) == 0:  # No containers using this image
@@ -245,65 +246,65 @@ def main(stdscr: curses.window):
                     elif selected >= scroll_offset + max_display_lines:
                         scroll_offset = selected - max_display_lines + 1
 
-                confirm_delete = False
-            else:
-                confirm_delete = False
+                confirm_delete_mode = False
+            elif k in [ord('n'), ord('N')] or k == ascii.ESC:
+                confirm_delete_mode = False
+        else:
+            if k == curses.KEY_UP:
+                selected = max(0, selected-1)
+            elif k == curses.KEY_DOWN:
+                selected = min(len(image_container_pairs)-1, selected+1)
+            elif k == curses.KEY_NPAGE:  # Page Down
+                if len(image_container_pairs) > 0:
+                    # If not at the last visible item, jump to last visible
+                    last_visible = min(scroll_offset + max_display_lines - 1, len(image_container_pairs) - 1)
+                    if selected != last_visible:
+                        selected = last_visible
+                    else:
+                        selected = min(selected + max_display_lines, len(image_container_pairs) - 1)
+            elif k == curses.KEY_PPAGE:  # Page Up
+                if len(image_container_pairs) > 0:
+                    # If not at the first visible item, jump to first visible
+                    first_visible = scroll_offset
+                    if selected != first_visible:
+                        selected = first_visible
+                    else:
+                        selected = max(selected - max_display_lines, 0)
+            elif k == ord('g'):  # Select first image
+                selected = 0
+            elif k == ord('G'):  # Select last image
+                selected = len(image_container_pairs) - 1
+            elif k == ord('d'):
+                # Only allow delete if not used
+                img, containers = image_container_pairs[selected]
+                if len(containers) == 0:  # No containers using this image
+                    confirm_delete_mode = True
+            elif k == ord('q'):
+                break
+            elif k == ord('r') or k == curses.KEY_F5:  # Refresh
+                old_selected_image = image_container_pairs[selected][0]
+                rel_pos = selected - scroll_offset
 
-                if k == curses.KEY_UP:
-                    selected = max(0, selected-1)
-                elif k == curses.KEY_DOWN:
-                    selected = min(len(image_container_pairs)-1, selected+1)
-                elif k == curses.KEY_NPAGE:  # Page Down
-                    if len(image_container_pairs) > 0:
-                        # If not at the last visible item, jump to last visible
-                        last_visible = min(scroll_offset + max_display_lines - 1, len(image_container_pairs) - 1)
-                        if selected != last_visible:
-                            selected = last_visible
-                        else:
-                            selected = min(selected + max_display_lines, len(image_container_pairs) - 1)
-                elif k == curses.KEY_PPAGE:  # Page Up
-                    if len(image_container_pairs) > 0:
-                        # If not at the first visible item, jump to first visible
-                        first_visible = scroll_offset
-                        if selected != first_visible:
-                            selected = first_visible
-                        else:
-                            selected = max(selected - max_display_lines, 0)
-                elif k == ord('g'):  # Select first image
-                    selected = 0
-                elif k == ord('G'):  # Select last image
-                    selected = len(image_container_pairs) - 1
-                elif k == ord('d'):
-                    # Only allow delete if not used
-                    img, containers = image_container_pairs[selected]
-                    if len(containers) == 0:  # No containers using this image
-                        confirm_delete = True
-                elif k == ord('q'):
-                    break
-                elif k == ord('r') or k == curses.KEY_F5:  # Refresh
-                    old_selected_image = image_container_pairs[selected][0]
-                    rel_pos = selected - scroll_offset
+                image_container_pairs = get_images_with_containers()
 
-                    image_container_pairs = get_images_with_containers()
+                selected = find_best_matching_image(
+                    image_container_pairs,
+                    old_selected_image['ID'],
+                    old_selected_image['Repository'],
+                    old_selected_image['Tag']
+                )
 
-                    selected = find_best_matching_image(
-                        image_container_pairs,
-                        old_selected_image['ID'],
-                        old_selected_image['Repository'],
-                        old_selected_image['Tag']
-                    )
-
-                    # Recompute scroll_offset to keep the selected image at the same relative position
-                    scroll_offset = selected - rel_pos
-                    if scroll_offset < 0:
-                        scroll_offset = 0
-                    elif scroll_offset > max(0, len(image_container_pairs) - max_display_lines):
-                        scroll_offset = max(0, len(image_container_pairs) - max_display_lines)
-                if k == ord('/'):
-                    # Enter search mode
-                    search_mode = True
-                    search_keyword = saved_search_keyword  # Use the saved keyword when entering search mode
-                    search_cursor_pos = len(search_keyword)  # Set cursor to end of keyword
+                # Recompute scroll_offset to keep the selected image at the same relative position
+                scroll_offset = selected - rel_pos
+                if scroll_offset < 0:
+                    scroll_offset = 0
+                elif scroll_offset > max(0, len(image_container_pairs) - max_display_lines):
+                    scroll_offset = max(0, len(image_container_pairs) - max_display_lines)
+            if k == ord('/'):
+                # Enter search mode
+                search_mode = True
+                search_keyword = saved_search_keyword  # Use the saved keyword when entering search mode
+                search_cursor_pos = len(search_keyword)  # Set cursor to end of keyword
 
         time.sleep(0.05)
 
