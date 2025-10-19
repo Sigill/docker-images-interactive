@@ -70,30 +70,6 @@ def left_ellipsis(value: str, sz: int):
     return ('…' + value[-(sz-1):]) if len(value) > sz else value
 
 
-# Helper to find the best matching image index after refresh
-def find_best_matching_image(
-    images: List[Tuple[ImageInfo, List[ContainerInfo]]],
-    old_id: str,
-    old_repo: str,
-    old_tag: str
-) -> int:
-    candidates = [(i, img) for i, (img, _) in enumerate(images) if img['ID'] == old_id]
-
-    # 1. Same id, repo, tag
-    for i, img in candidates:
-        if img['Repository'] == old_repo and img['Tag'] == old_tag:
-            return i
-    # 2. Same id, repo
-    for i, img in candidates:
-        if img['Repository'] == old_repo:
-            return i
-    # 3. Same id
-    if len(candidates) > 0:
-        return candidates[0][0]
-
-    return 0
-
-
 def delete_image(img: ImageInfo):
     if img['Repository'] != '<none>' and img['Tag'] != '<none>':
         name = f"{img['Repository']}:{img['Tag']}"
@@ -203,6 +179,8 @@ def main(stdscr: curses.window):
         k = stdscr.getch()
 
         if search_mode:
+            selected = 0
+
             if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 # Validate and save the search keyword
                 saved_search_keyword = search_keyword
@@ -284,24 +262,8 @@ def main(stdscr: curses.window):
             elif k == ord('q'):
                 break
             elif k == ord('r') or k == curses.KEY_F5:  # Refresh
-                old_selected_image = image_container_pairs[selected][0]
-                rel_pos = selected - scroll_offset
-
                 image_container_pairs = get_images_with_containers()
-
-                selected = find_best_matching_image(
-                    image_container_pairs,
-                    old_selected_image['ID'],
-                    old_selected_image['Repository'],
-                    old_selected_image['Tag']
-                )  # TODO Do not select item 0 on successful delete.
-
-                # Recompute scroll_offset to keep the selected image at the same relative position
-                scroll_offset = selected - rel_pos
-                if scroll_offset < 0:
-                    scroll_offset = 0
-                elif scroll_offset > max(0, len(image_container_pairs) - max_display_lines):
-                    scroll_offset = max(0, len(image_container_pairs) - max_display_lines)
+                selected = 0
             if k == ord('/'):
                 # Enter search mode
                 search_mode = True
