@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import curses
-from curses import ascii
-import subprocess
+import curses.ascii
 import json
+import subprocess
 import time
-from typing import Any, TypedDict, List, Tuple
+from typing import Any, List, Tuple, TypedDict
 
 
 # Docker image fields from 'docker images --format {{json .}}'
@@ -35,7 +35,7 @@ class ContainerInfo(TypedDict):
 
 # Utility function to run a Docker command and parse the JSON output
 def run_docker_command(command: List[str]) -> List[Any]:
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
     return [json.loads(line) for line in result.stdout.strip().split('\n') if line]
 
 
@@ -100,7 +100,8 @@ def delete_image(img: ImageInfo):
     else:
         name = img['ID']
 
-    subprocess.run(['docker', 'rmi', name])
+    # check=False, because docker rmi might fail if e.g. the image has already been removed from outside this script.
+    subprocess.run(['docker', 'rmi', name], check=False)
 
 
 def filter_images(image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]], keyword: str):
@@ -132,6 +133,7 @@ def display_editable_text(stdscr: curses.window, text: str, cursor_position: int
         stdscr.addch(y, x + cursor_position, ' ', curses.A_REVERSE)
 
 
+# pylint: disable=too-many-locals,too-many-branches,too-many-statements
 def main(stdscr: curses.window):
     curses.curs_set(0)
 
@@ -175,13 +177,13 @@ def main(stdscr: curses.window):
         if used_search_keyword:
             display_pairs = filter_images(image_container_pairs, used_search_keyword)
 
-        stdscr.addstr(0, 0, "ID           REPOSITORY                       TAG              SIZE       CREATED          USED")
+        stdscr.addstr(0, 0, "ID           REPOSITORY                       TAG              SIZE       CREATED          USED")  # noqa: E501 # pylint: disable=line-too-long
 
         # Display only the visible range of images
         for idx, (img, containers) in enumerate(display_pairs[scroll_offset:scroll_offset+max_display_lines]):
             display_idx = idx + scroll_offset
             marker = '*' if len(containers) > 0 else ' '
-            line = f"{img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {marker}"
+            line = f"{img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {marker}"  # noqa: E501 # pylint: disable=line-too-long
             if display_idx == selected:
                 stdscr.addstr(1+idx, 0, line, curses.A_REVERSE)
             else:
@@ -201,17 +203,17 @@ def main(stdscr: curses.window):
         k = stdscr.getch()
 
         if search_mode:
-            if k == curses.KEY_ENTER or k == ascii.CR or k == ascii.LF:
+            if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 # Validate and save the search keyword
                 saved_search_keyword = search_keyword
                 search_mode = False
                 search_cursor_pos = 0
-            elif k == ascii.ESC:  # ESC key
+            elif k == curses.ascii.ESC:  # ESC key
                 # Cancel search mode
                 search_mode = False
                 search_keyword = ""
                 search_cursor_pos = 0
-            elif k == curses.KEY_BACKSPACE or k == ascii.DEL or k == ascii.BS:
+            elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
                 # Backspace
                 if search_cursor_pos > 0:
                     search_keyword = search_keyword[:search_cursor_pos-1] + search_keyword[search_cursor_pos:]
@@ -247,7 +249,7 @@ def main(stdscr: curses.window):
                         scroll_offset = selected - max_display_lines + 1
 
                 confirm_delete_mode = False
-            elif k in [ord('n'), ord('N')] or k == ascii.ESC:
+            elif k in [ord('n'), ord('N')] or k == curses.ascii.ESC:
                 confirm_delete_mode = False
         else:
             if k == curses.KEY_UP:
@@ -292,7 +294,7 @@ def main(stdscr: curses.window):
                     old_selected_image['ID'],
                     old_selected_image['Repository'],
                     old_selected_image['Tag']
-                )
+                )  # TODO Do not select item 0 on successful delete.
 
                 # Recompute scroll_offset to keep the selected image at the same relative position
                 scroll_offset = selected - rel_pos

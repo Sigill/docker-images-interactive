@@ -2,6 +2,8 @@
 
 `docker images`, but interactive.
 
+It is especially useful to interactively delete images.
+
 ## Requirements & installation
 
 This script requires Python 3.8 or higher.

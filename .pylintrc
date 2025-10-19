@@ -1,0 +1,26 @@
+[MAIN]
+
+disable=missing-module-docstring,
+        missing-function-docstring,
+        missing-class-docstring,
+        no-else-return
+
+[BASIC]
+
+module-naming-style=any
+
+[FORMAT]
+
+expected-line-ending-format=LF
+
+indent-string='    '
+
+max-line-length=120
+
+[MISCELLANEOUS]
+
+notes=FIXME,XXX
+
+[REPORTS]
+
+score=no
