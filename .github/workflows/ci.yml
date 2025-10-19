@@ -1,0 +1,39 @@
+name: CI
+
+# Avoid running it twice when pushing to a merge-request.
+# https://adamj.eu/tech/2025/05/14/github-actions-avoid-simple-on/
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pylint bandit
+
+      - name: Run flake8
+        run: |
+          flake8 $(git ls-files '*.py')
+
+      - name: Run pylint
+        run: |
+          pylint $(git ls-files '*.py')
+
+      - name: Run bandit
+        run: |
+          # Only reports findings with severity medium or higher.
+          bandit --severity-level medium $(git ls-files '*.py')
