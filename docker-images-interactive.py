@@ -3,7 +3,6 @@ import curses
 import curses.ascii
 import json
 import subprocess
-import time
 from typing import Any, List, Tuple, TypedDict
 
 
@@ -281,8 +280,6 @@ def main(stdscr: curses.window):
 
         if not view.handle_input(k):
             break
-
-        time.sleep(0.05)
 
 
 if __name__ == "__main__":
