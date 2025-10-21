@@ -109,7 +109,161 @@ def display_editable_text(stdscr: curses.window, text: str, cursor_position: int
         stdscr.addch(y, x + cursor_position, ' ', curses.A_REVERSE)
 
 
-# pylint: disable=too-many-locals,too-many-branches,too-many-statements
+class ImageView:
+    def __init__(self, stdscr: curses.window):
+        self.stdscr = stdscr
+        self.selected = 0
+        self.confirm_delete_mode = False
+        self.image_container_pairs = get_images_with_containers()
+        self.scroll_offset = 0
+        self.max_display_lines = 0
+        self.search_mode = False
+        self.search_keyword = ""
+        self.saved_search_keyword = ""
+        self.search_cursor_pos = 0
+
+    def display(self):
+        max_y, _ = self.stdscr.getmaxyx()
+        self.max_display_lines = max_y - 2  # Reserve 2 lines for header and instructions
+
+        # Calculate scroll offset to keep selected item visible
+        if self.selected < self.scroll_offset:
+            self.scroll_offset = self.selected
+        elif self.selected >= self.scroll_offset + self.max_display_lines:
+            self.scroll_offset = self.selected - self.max_display_lines + 1
+
+        # Ensure scroll offset is not negative
+        self.scroll_offset = max(0, self.scroll_offset)
+
+        display_pairs = self.image_container_pairs
+        # Apply filtering if in search mode
+        used_search_keyword = self.search_keyword if self.search_mode else self.saved_search_keyword
+        if used_search_keyword:
+            display_pairs = filter_images(self.image_container_pairs, used_search_keyword)
+
+        self.stdscr.addstr(0, 0, "ID           REPOSITORY                       TAG              SIZE       CREATED          USED")  # noqa: E501 # pylint: disable=line-too-long
+
+        # Display only the visible range of images
+        for idx, (img, containers) in enumerate(display_pairs[self.scroll_offset:self.scroll_offset+self.max_display_lines]):
+            display_idx = idx + self.scroll_offset
+            marker = '*' if len(containers) > 0 else ' '
+            line = f"{img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {marker}"  # noqa: E501 # pylint: disable=line-too-long
+            if display_idx == self.selected:
+                self.stdscr.addstr(1+idx, 0, line, curses.A_REVERSE)
+            else:
+                self.stdscr.addstr(1+idx, 0, line)
+
+        if self.search_mode:
+            self.stdscr.addstr(max_y-1, 0, "Search: ")
+            search_start_x = 8  # Position after "Search: "
+            display_editable_text(self.stdscr, self.search_keyword, self.search_cursor_pos, max_y-1, search_start_x)
+        elif self.confirm_delete_mode:
+            image = display_pairs[self.selected][0]
+            self.stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
+        else:
+            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search)")
+
+        self.stdscr.refresh()
+
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    def handle_input(self) -> bool:
+        k = self.stdscr.getch()
+
+        if self.search_mode:
+            self.selected = 0
+
+            if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
+                # Validate and save the search keyword
+                self.saved_search_keyword = self.search_keyword
+                self.search_mode = False
+                self.search_cursor_pos = 0
+            elif k == curses.ascii.ESC:  # ESC key
+                # Cancel search mode
+                self.search_mode = False
+                self.search_keyword = ""
+                self.search_cursor_pos = 0
+            elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
+                # Backspace
+                if self.search_cursor_pos > 0:
+                    self.search_keyword = self.search_keyword[:self.search_cursor_pos-1] + self.search_keyword[self.search_cursor_pos:]
+                    self.search_cursor_pos -= 1
+            elif k == curses.KEY_LEFT:
+                # Left arrow - move cursor left
+                if self.search_cursor_pos > 0:
+                    self.search_cursor_pos -= 1
+            elif k == curses.KEY_RIGHT:
+                # Right arrow - move cursor right
+                if self.search_cursor_pos < len(self.search_keyword):
+                    self.search_cursor_pos += 1
+            elif k == curses.KEY_DC:  # Delete key
+                # Delete character at cursor position
+                if self.search_cursor_pos < len(self.search_keyword):
+                    self.search_keyword = self.search_keyword[:self.search_cursor_pos] + self.search_keyword[self.search_cursor_pos+1:]
+            elif 32 <= k <= 126:  # Printable characters
+                # Add character to search keyword at cursor position
+                self.search_keyword = self.search_keyword[:self.search_cursor_pos] + chr(k) + self.search_keyword[self.search_cursor_pos:]
+                self.search_cursor_pos += 1
+        elif self.confirm_delete_mode:
+            if k in [ord('y'), ord('Y')]:
+                # Only delete if not used
+                img, containers = self.image_container_pairs[self.selected]
+                if len(containers) == 0:  # No containers using this image
+                    delete_image(img)
+                    self.image_container_pairs = get_images_with_containers()
+                    self.selected = min(self.selected, len(self.image_container_pairs)-1)
+                    # Adjust scroll offset after deletion
+                    if self.selected < self.scroll_offset:
+                        self.scroll_offset = self.selected
+                    elif self.selected >= self.scroll_offset + self.max_display_lines:
+                        self.scroll_offset = self.selected - self.max_display_lines + 1
+
+                self.confirm_delete_mode = False
+            elif k in [ord('n'), ord('N')] or k == curses.ascii.ESC:
+                self.confirm_delete_mode = False
+        else:
+            if k == curses.KEY_UP:
+                self.selected = max(0, self.selected-1)
+            elif k == curses.KEY_DOWN:
+                self.selected = min(len(self.image_container_pairs)-1, self.selected+1)
+            elif k == curses.KEY_NPAGE:  # Page Down
+                if len(self.image_container_pairs) > 0:
+                    # If not at the last visible item, jump to last visible
+                    last_visible = min(self.scroll_offset + self.max_display_lines - 1, len(self.image_container_pairs) - 1)
+                    if self.selected != last_visible:
+                        self.selected = last_visible
+                    else:
+                        self.selected = min(self.selected + self.max_display_lines, len(self.image_container_pairs) - 1)
+            elif k == curses.KEY_PPAGE:  # Page Up
+                if len(self.image_container_pairs) > 0:
+                    # If not at the first visible item, jump to first visible
+                    first_visible = self.scroll_offset
+                    if self.selected != first_visible:
+                        self.selected = first_visible
+                    else:
+                        self.selected = max(self.selected - self.max_display_lines, 0)
+            elif k == ord('g'):  # Select first image
+                self.selected = 0
+            elif k == ord('G'):  # Select last image
+                self.selected = len(self.image_container_pairs) - 1
+            elif k == ord('d'):
+                # Only allow delete if not used
+                img, containers = self.image_container_pairs[self.selected]
+                if len(containers) == 0:  # No containers using this image
+                    self.confirm_delete_mode = True
+            elif k == ord('q'):
+                return False
+            elif k == ord('r') or k == curses.KEY_F5:  # Refresh
+                self.image_container_pairs = get_images_with_containers()
+                self.selected = 0
+            if k == ord('/'):
+                # Enter search mode
+                self.search_mode = True
+                self.search_keyword = self.saved_search_keyword  # Use the saved keyword when entering search mode
+                self.search_cursor_pos = len(self.search_keyword)  # Set cursor to end of keyword
+
+        return True
+
+
 def main(stdscr: curses.window):
     curses.curs_set(0)
 
@@ -119,156 +273,11 @@ def main(stdscr: curses.window):
         # Initialize color pair 1 for normal text with default foreground and background colors
         curses.init_pair(1, -1, -1)  # -1 means default terminal colors
 
-    selected = 0
-    confirm_delete_mode = False
-    image_container_pairs = get_images_with_containers()
-
-    # Scroll-related variables
-    scroll_offset = 0
-    max_display_lines = 0
-
-    # Search-related variables
-    search_mode: bool = False
-    search_keyword: str = ""
-    saved_search_keyword: str = ""
-    search_cursor_pos: int = 0  # Track cursor position in search keyword
-
+    view = ImageView(stdscr)
     while True:
-        stdscr.clear()
-        max_y, _ = stdscr.getmaxyx()
-        max_display_lines = max_y - 2  # Reserve 2 lines for header and instructions
-
-        # Calculate scroll offset to keep selected item visible
-        if selected < scroll_offset:
-            scroll_offset = selected
-        elif selected >= scroll_offset + max_display_lines:
-            scroll_offset = selected - max_display_lines + 1
-
-        # Ensure scroll offset is not negative
-        scroll_offset = max(0, scroll_offset)
-
-        display_pairs = image_container_pairs
-        # Apply filtering if in search mode
-        used_search_keyword = search_keyword if search_mode else saved_search_keyword
-        if used_search_keyword:
-            display_pairs = filter_images(image_container_pairs, used_search_keyword)
-
-        stdscr.addstr(0, 0, "ID           REPOSITORY                       TAG              SIZE       CREATED          USED")  # noqa: E501 # pylint: disable=line-too-long
-
-        # Display only the visible range of images
-        for idx, (img, containers) in enumerate(display_pairs[scroll_offset:scroll_offset+max_display_lines]):
-            display_idx = idx + scroll_offset
-            marker = '*' if len(containers) > 0 else ' '
-            line = f"{img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {marker}"  # noqa: E501 # pylint: disable=line-too-long
-            if display_idx == selected:
-                stdscr.addstr(1+idx, 0, line, curses.A_REVERSE)
-            else:
-                stdscr.addstr(1+idx, 0, line)
-
-        if search_mode:
-            stdscr.addstr(max_y-1, 0, "Search: ")
-            search_start_x = 8  # Position after "Search: "
-            display_editable_text(stdscr, search_keyword, search_cursor_pos, max_y-1, search_start_x)
-        elif confirm_delete_mode:
-            image = display_pairs[selected][0]
-            stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
-        else:
-            stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search)")
-
-        stdscr.refresh()
-        k = stdscr.getch()
-
-        if search_mode:
-            selected = 0
-
-            if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
-                # Validate and save the search keyword
-                saved_search_keyword = search_keyword
-                search_mode = False
-                search_cursor_pos = 0
-            elif k == curses.ascii.ESC:  # ESC key
-                # Cancel search mode
-                search_mode = False
-                search_keyword = ""
-                search_cursor_pos = 0
-            elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
-                # Backspace
-                if search_cursor_pos > 0:
-                    search_keyword = search_keyword[:search_cursor_pos-1] + search_keyword[search_cursor_pos:]
-                    search_cursor_pos -= 1
-            elif k == curses.KEY_LEFT:
-                # Left arrow - move cursor left
-                if search_cursor_pos > 0:
-                    search_cursor_pos -= 1
-            elif k == curses.KEY_RIGHT:
-                # Right arrow - move cursor right
-                if search_cursor_pos < len(search_keyword):
-                    search_cursor_pos += 1
-            elif k == curses.KEY_DC:  # Delete key
-                # Delete character at cursor position
-                if search_cursor_pos < len(search_keyword):
-                    search_keyword = search_keyword[:search_cursor_pos] + search_keyword[search_cursor_pos+1:]
-            elif 32 <= k <= 126:  # Printable characters
-                # Add character to search keyword at cursor position
-                search_keyword = search_keyword[:search_cursor_pos] + chr(k) + search_keyword[search_cursor_pos:]
-                search_cursor_pos += 1
-        elif confirm_delete_mode:
-            if k in [ord('y'), ord('Y')]:
-                # Only delete if not used
-                img, containers = image_container_pairs[selected]
-                if len(containers) == 0:  # No containers using this image
-                    delete_image(img)
-                    image_container_pairs = get_images_with_containers()
-                    selected = min(selected, len(image_container_pairs)-1)
-                    # Adjust scroll offset after deletion
-                    if selected < scroll_offset:
-                        scroll_offset = selected
-                    elif selected >= scroll_offset + max_display_lines:
-                        scroll_offset = selected - max_display_lines + 1
-
-                confirm_delete_mode = False
-            elif k in [ord('n'), ord('N')] or k == curses.ascii.ESC:
-                confirm_delete_mode = False
-        else:
-            if k == curses.KEY_UP:
-                selected = max(0, selected-1)
-            elif k == curses.KEY_DOWN:
-                selected = min(len(image_container_pairs)-1, selected+1)
-            elif k == curses.KEY_NPAGE:  # Page Down
-                if len(image_container_pairs) > 0:
-                    # If not at the last visible item, jump to last visible
-                    last_visible = min(scroll_offset + max_display_lines - 1, len(image_container_pairs) - 1)
-                    if selected != last_visible:
-                        selected = last_visible
-                    else:
-                        selected = min(selected + max_display_lines, len(image_container_pairs) - 1)
-            elif k == curses.KEY_PPAGE:  # Page Up
-                if len(image_container_pairs) > 0:
-                    # If not at the first visible item, jump to first visible
-                    first_visible = scroll_offset
-                    if selected != first_visible:
-                        selected = first_visible
-                    else:
-                        selected = max(selected - max_display_lines, 0)
-            elif k == ord('g'):  # Select first image
-                selected = 0
-            elif k == ord('G'):  # Select last image
-                selected = len(image_container_pairs) - 1
-            elif k == ord('d'):
-                # Only allow delete if not used
-                img, containers = image_container_pairs[selected]
-                if len(containers) == 0:  # No containers using this image
-                    confirm_delete_mode = True
-            elif k == ord('q'):
-                break
-            elif k == ord('r') or k == curses.KEY_F5:  # Refresh
-                image_container_pairs = get_images_with_containers()
-                selected = 0
-            if k == ord('/'):
-                # Enter search mode
-                search_mode = True
-                search_keyword = saved_search_keyword  # Use the saved keyword when entering search mode
-                search_cursor_pos = len(search_keyword)  # Set cursor to end of keyword
+        view.display()
+        if not view.handle_input():
+            break
 
         time.sleep(0.05)
 
