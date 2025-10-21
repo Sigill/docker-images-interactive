@@ -166,11 +166,7 @@ class ImageView:
         self.stdscr.refresh()
 
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-    def handle_input(self) -> bool:
-        k = self.stdscr.getch()
-        # Clear the screen. This is especially important when resizing the terminal, which send a curses.KEY_RESIZE.
-        self.stdscr.erase()
-
+    def handle_input(self, k: int) -> bool:
         if self.search_mode:
             self.selected = 0
 
@@ -278,7 +274,12 @@ def main(stdscr: curses.window):
     view = ImageView(stdscr)
     while True:
         view.display()
-        if not view.handle_input():
+
+        k = stdscr.getch()
+        # Clear the screen. This is especially important when resizing the terminal, which send a curses.KEY_RESIZE.
+        stdscr.erase()
+
+        if not view.handle_input(k):
             break
 
         time.sleep(0.05)
