@@ -6,6 +6,11 @@ import subprocess
 from typing import Any, Iterable, List, Set, Tuple, TypedDict
 
 
+# pylint: disable=too-few-public-methods
+class Config():
+    enable_delete_confirmation: bool = True
+
+
 # Docker image fields from 'docker images --format {{json .}}'
 class ImageInfo(TypedDict):
     ID: str
@@ -150,8 +155,9 @@ def pretty_id_or_name(value: str, sz: int | None) -> str:
 
 # pylint: disable=too-many-instance-attributes
 class ImageView:
-    def __init__(self, stdscr: curses.window):
+    def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
+        self.config = config
 
         self.image_container_pairs = get_images_with_containers()
 
@@ -229,12 +235,12 @@ class ImageView:
             display_editable_text(self.stdscr, self.search_keyword, self.search_cursor_pos, max_y-1, search_start_x)
         elif self.confirm_delete_mode:
             if len(self.selected_images) > 0:
-                self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.selected_images)} images? (y/n)")
+                self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.selected_images)} images? (y/n) [Y to skip confirmation]")
             else:
                 image = display_pairs[self.current_image][0]
-                self.stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
+                self.stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n) [Y to skip confirmation]")
         else:
-            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search, v: container list)")
+            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search, v: container list view)")
 
     def _delete_selected_images(self) -> None:
         if len(self.selected_images) == 0:
@@ -287,7 +293,10 @@ class ImageView:
                 self.search_keyword = self.search_keyword[:self.search_cursor_pos] + chr(k) + self.search_keyword[self.search_cursor_pos:]
                 self.search_cursor_pos += 1
         elif self.confirm_delete_mode:
-            if k in [ord('y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
+            if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
+                if k == ord('Y'):
+                    self.config.enable_delete_confirmation = False
+
                 self._delete_selected_images()
                 self.confirm_delete_mode = False
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
@@ -318,7 +327,10 @@ class ImageView:
             elif k == ord('G'):  # Select last image
                 self.current_image = len(self.image_container_pairs) - 1
             elif k == ord('d'):
-                self.confirm_delete_mode = True
+                if self.config.enable_delete_confirmation:
+                    self.confirm_delete_mode = True
+                else:
+                    self._delete_selected_images()
             elif k == ord('q') or k == curses.ascii.ESC:
                 return False
             elif k == ord('r') or k == curses.KEY_F5:  # Refresh
@@ -340,8 +352,9 @@ class ImageView:
 
 
 class ContainerView:
-    def __init__(self, stdscr: curses.window):
+    def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
+        self.config = config
 
         self.containers = list_docker_containers()
 
@@ -406,12 +419,12 @@ class ContainerView:
 
         if self.confirm_delete_mode:
             if len(self.selected_containers) > 0:
-                self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.selected_containers)} containers? (y/n)")
+                self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.selected_containers)} containers? (y/n) [Y to skip confirmation]")
             else:
                 container = self.containers[self.current_container]
-                self.stdscr.addstr(max_y-1, 0, f"Delete container {container['ID'][:8]} - {container['Names']}? (y/n)")
+                self.stdscr.addstr(max_y-1, 0, f"Delete container {container['ID'][:8]} - {container['Names']}? (y/n) [Y to skip confirmation]")
         else:
-            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, v: image list)")
+            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, v: image list view)")
 
     def _delete_selected_containers(self) -> None:
         if len(self.selected_containers) == 0:
@@ -430,7 +443,10 @@ class ContainerView:
     # pylint: disable=too-many-branches
     def handle_input(self, k: int) -> bool:
         if self.confirm_delete_mode:
-            if k in [ord('y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
+            if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
+                if k == ord('Y'):
+                    self.config.enable_delete_confirmation = False
+
                 self._delete_selected_containers()
                 self.confirm_delete_mode = False
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
@@ -459,7 +475,10 @@ class ContainerView:
             elif k == ord('G'):  # Select last container
                 self.current_container = len(self.containers) - 1
             elif k == ord('d'):
-                self.confirm_delete_mode = True
+                if self.config.enable_delete_confirmation:
+                    self.confirm_delete_mode = True
+                else:
+                    self._delete_selected_containers()
             elif k == ord('q') or k == curses.ascii.ESC:
                 return False
             elif k == ord('r') or k == curses.KEY_F5:  # Refresh
@@ -478,7 +497,7 @@ class ContainerView:
         return True
 
 
-def main(stdscr: curses.window):
+def main_curses(stdscr: curses.window, config: Config):
     curses.curs_set(0)
 
     if curses.has_colors():
@@ -487,7 +506,7 @@ def main(stdscr: curses.window):
         # Initialize color pair 1 for normal text with default foreground and background colors
         curses.init_pair(1, -1, -1)  # -1 means default terminal colors
 
-    view: ImageView | ContainerView = ImageView(stdscr)
+    view: ImageView | ContainerView = ImageView(stdscr, config)
 
     while True:
         view.display()
@@ -498,12 +517,17 @@ def main(stdscr: curses.window):
         stdscr.erase()
 
         if k == ord('v'):  # Switch view
-            view = ContainerView(stdscr) if isinstance(view, ImageView) else ImageView(stdscr)
+            view = ContainerView(stdscr, config) if isinstance(view, ImageView) else ImageView(stdscr, config)
             continue
 
         if not view.handle_input(k):
             break
 
 
+def main():
+    config = Config()
+    curses.wrapper(lambda w: main_curses(w, config))
+
+
 if __name__ == "__main__":
-    curses.wrapper(main)
+    main()
