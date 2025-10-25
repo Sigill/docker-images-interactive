@@ -3,7 +3,7 @@ import curses
 import curses.ascii
 import json
 import subprocess
-from typing import Any, Callable, Generic, Iterable, List, Set, Tuple, TypeVar, TypedDict
+from typing import Any, Callable, Iterable, List, Set, Tuple, TypedDict
 
 
 # pylint: disable=too-few-public-methods
@@ -216,19 +216,14 @@ class Filter:
             self.search_cursor_pos += 1
 
 
-T = TypeVar('T')
-
-
 # pylint: disable=too-many-instance-attributes
-class ListController(Generic[T]):
+class ListController:
     def __init__(
         self,
-        items: List[T],
+        get_list_length: Callable[[], int],
         on_refresh: Callable[[], None],
         on_delete: Callable[[], None],
     ) -> None:
-        self.items = items
-
         self.filter = Filter()
 
         self.current: int = 0
@@ -237,6 +232,7 @@ class ListController(Generic[T]):
         self.max_display_lines = 0
         self.scroll_offset = 0
 
+        self.get_list_length = get_list_length
         self.on_refresh = on_refresh
         self.on_delete = on_delete
 
@@ -252,18 +248,18 @@ class ListController(Generic[T]):
             self.current = max(0, self.current-1)
             return True
         elif k == curses.KEY_DOWN:
-            self.current = min(len(self.items)-1, self.current+1)
+            self.current = min(self.get_list_length()-1, self.current+1)
             return True
         elif k == curses.KEY_NPAGE:  # Page Down
-            if len(self.items) > 0:
-                last_visible = min(self.scroll_offset + self.max_display_lines - 1, len(self.items) - 1)
+            if self.get_list_length() > 0:
+                last_visible = min(self.scroll_offset + self.max_display_lines - 1, self.get_list_length() - 1)
                 if self.current != last_visible:
                     self.current = last_visible
                 else:
-                    self.current = min(self.current + self.max_display_lines, len(self.items) - 1)
+                    self.current = min(self.current + self.max_display_lines, self.get_list_length() - 1)
             return True
         elif k == curses.KEY_PPAGE:  # Page Up
-            if len(self.items) > 0:
+            if self.get_list_length() > 0:
                 first_visible = self.scroll_offset
                 if self.current != first_visible:
                     self.current = first_visible
@@ -274,7 +270,7 @@ class ListController(Generic[T]):
             self.current = 0
             return True
         elif k == ord('G'):  # Select last container
-            self.current = len(self.items) - 1
+            self.current = self.get_list_length() - 1
             return True
         elif k == ord('d'):
             self.on_delete()
@@ -309,7 +305,7 @@ class ImageView:
         self.image_container_pairs = get_images_with_containers()
 
         self.list_controller = ListController(
-            self.image_container_pairs,
+            get_list_length=lambda: len(self.image_container_pairs),
             on_refresh=self._refresh,
             on_delete=self._on_delete
         )
@@ -320,7 +316,6 @@ class ImageView:
 
     def _refresh(self):
         self.image_container_pairs = get_images_with_containers()
-        self.list_controller.items = self.image_container_pairs
 
     def _on_delete(self):
         if self.config.enable_delete_confirmation:
@@ -438,7 +433,7 @@ class ContainerView:
         self.containers = list_docker_containers()
 
         self.list_controller = ListController(
-            self.containers,
+            get_list_length=lambda: len(self.containers),
             on_refresh=self._refresh,
             on_delete=self._on_delete
         )
@@ -449,7 +444,6 @@ class ContainerView:
 
     def _refresh(self):
         self.containers = list_docker_containers()
-        self.list_controller.items = self.containers
 
     def _on_delete(self):
         if self.config.enable_delete_confirmation:
