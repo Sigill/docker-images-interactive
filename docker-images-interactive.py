@@ -3,7 +3,7 @@ import curses
 import curses.ascii
 import json
 import subprocess
-from typing import Any, List, Set, Tuple, TypedDict
+from typing import Any, Iterable, List, Set, Tuple, TypedDict
 
 
 # Docker image fields from 'docker images --format {{json .}}'
@@ -40,12 +40,12 @@ def run_docker_command(command: List[str]) -> List[Any]:
 
 # Utility to run 'docker images --format {{json .}}' and return list of ImageInfo
 def list_docker_images() -> List[ImageInfo]:
-    return run_docker_command(['docker', 'images', '--format', '{{json .}}'])
+    return run_docker_command(['docker', 'images', '--format', '{{json .}}', '--no-trunc'])
 
 
 # Utility to run 'docker ps -a --format {{json .}}' and return list of ContainerInfo
 def list_docker_containers() -> List[ContainerInfo]:
-    return run_docker_command(['docker', 'ps', '-a', '--format', '{{json .}}'])
+    return run_docker_command(['docker', 'ps', '-a', '--format', '{{json .}}', '--no-trunc'])
 
 
 # Function that returns list of (ImageInfo, List[ContainerInfo]) tuples
@@ -117,6 +117,37 @@ def display_editable_text(stdscr: curses.window, text: str, cursor_position: int
         stdscr.addch(y, x + cursor_position, ' ', curses.A_REVERSE)
 
 
+def compute_columns_width(
+    headers_width: list[int],
+    columns_width: Iterable[List[int | str]]
+) -> List[int]:
+    max_width = headers_width.copy()
+
+    for column_width in columns_width:
+        for i, value in enumerate(column_width):
+            sz = len(value) if isinstance(value, str) else value
+            if sz > max_width[i]:
+                max_width[i] = sz
+
+    return max_width
+
+
+def format_columns(columns: Iterable[Tuple[str, int]]) -> str:
+    return '  '.join(f"{value:{width}}" for (value, width) in columns)
+
+
+def remove_prefix(value: str, prefix: str) -> str:
+    # Starting with python3.9, use str.removeprefix().
+    return value[len(prefix):] if value.startswith(prefix) else value
+
+
+def pretty_id_or_name(value: str, sz: int | None) -> str:
+    prefix = 'sha256:'
+    if value.startswith(prefix):
+        return value[len(prefix):][:sz]
+    return value
+
+
 # pylint: disable=too-many-instance-attributes
 class ImageView:
     def __init__(self, stdscr: curses.window):
@@ -156,40 +187,37 @@ class ImageView:
         if used_search_keyword:
             display_pairs = filter_images(self.image_container_pairs, used_search_keyword)
 
-        # pylint: disable=too-many-arguments
-        def make_line(*, selected: bool, image_id: str, repository: str, tag: str, size: str, created: str, used: str) -> str:
-            return ' '.join((
-                '>' if selected else ' ',
-                f"{image_id:12}",
-                f"{lell(repository, 32):32}",
-                f"{lell(tag, 16):16}",
-                f"{size:10}",
-                f"{created:16}",
-                f"{used:4}",
-            ))
+        headers = [' ', 'IMAGE ID', 'REPOSITORY', 'TAG', 'SIZE', 'CREATED', 'USED']
+        columns_width = compute_columns_width(
+            [len(h) for h in headers],
+            ([
+                1,
+                remove_prefix(value=img['ID'], prefix='sha256:')[:12],
+                img['Repository'],
+                img['Tag'],
+                img['Size'],
+                img['CreatedSince'],
+                1
+            ] for (img, _) in display_pairs)
+        )
 
-        self.stdscr.addstr(0, 0, make_line(
-            selected=False,
-            image_id='IMAGE ID',
-            repository='REPOSITORY',
-            tag='TAG',
-            size='SIZE',
-            created='CREATED',
-            used='USED'
-        ))
+        self.stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
 
         # Display only the visible range of images
-        for display_idx, (img, containers) in enumerate(display_pairs[self.scroll_offset:self.scroll_offset+self.max_display_lines]):
+        for display_idx, (img, containers) in enumerate(display_pairs[self.scroll_offset:][:self.max_display_lines]):
             idx = display_idx + self.scroll_offset
-            line = make_line(
-                selected=idx in self.selected_images,
-                image_id=img['ID'],
-                repository=img['Repository'],
-                tag=img['Tag'],
-                size=img['Size'],
-                created=img['CreatedSince'],
-                used='*' if len(containers) > 0 else ' '
-            )
+            line = format_columns(zip(
+                [
+                    '>' if idx in self.selected_images else ' ',
+                    remove_prefix(value=img['ID'], prefix='sha256:')[:12],
+                    img['Repository'],
+                    img['Tag'],
+                    img['Size'],
+                    img['CreatedSince'],
+                    '*' if len(containers) > 0 else ' '
+                ],
+                columns_width
+            ))
             if idx == self.current_image:
                 self.stdscr.addstr(1+display_idx, 0, line, curses.A_REVERSE)
             else:
@@ -342,42 +370,39 @@ class ContainerView:
         # Ensure scroll offset is not negative
         self.scroll_offset = max(0, self.scroll_offset)
 
-        # pylint: disable=too-many-arguments
-        def make_line(*, selected: bool, container_id: str, image: str, command: str, created: str, status: str, names: str) -> str:
-            return ' '.join((
-                '>' if selected else ' ',
-                f"{container_id:12}",
-                f"{rell(image, 32):32}",
-                f"{rell(command, 20):20}",
-                f"{created:16}",
-                f"{status:24}",
-                f"{rell(names, 16):16}"
+        headers = [' ', 'CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'NAMES']
+        columns_width = compute_columns_width(
+            [len(h) for h in headers],
+            ([
+                1,
+                cont['ID'][:12],
+                pretty_id_or_name(cont['Image'], 12),
+                cont['Command'],
+                cont['RunningFor'],
+                cont['Status'],
+                cont['Names']
+            ] for cont in self.containers)
+        )
+
+        self.stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
+
+        for display_idx, container in enumerate(self.containers[self.scroll_offset:][:self.max_display_lines]):
+            line = format_columns(zip(
+                [
+                    '>' if display_idx in self.selected_containers else ' ',
+                    container['ID'][:12],
+                    pretty_id_or_name(container['Image'], 12),
+                    container['Command'],
+                    container['RunningFor'],
+                    container['Status'],
+                    container['Names'],
+                ],
+                columns_width
             ))
-
-        self.stdscr.addstr(0, 0, make_line(
-            selected=False,
-            container_id='CONTAINER ID',
-            image='IMAGE',
-            command='COMMAND',
-            created='CREATED',
-            status='STATUS',
-            names='NAMES'
-        ))
-
-        for i, container in enumerate(self.containers[self.scroll_offset:self.scroll_offset + self.max_display_lines]):
-            line = make_line(
-                selected=i in self.selected_containers,
-                container_id=container['ID'],
-                image=container['Image'],
-                command=container['Command'],
-                created=container['RunningFor'],
-                status=container['Status'],
-                names=container['Names']
-            )
-            if i + self.scroll_offset == self.current_container:
-                self.stdscr.addstr(1+i, 0, line, curses.A_REVERSE)
+            if display_idx + self.scroll_offset == self.current_container:
+                self.stdscr.addstr(1+display_idx, 0, line, curses.A_REVERSE)
             else:
-                self.stdscr.addstr(1+i, 0, line)
+                self.stdscr.addstr(1+display_idx, 0, line)
 
         if self.confirm_delete_mode:
             if len(self.selected_containers) > 0:
