@@ -80,12 +80,12 @@ def delete_image(img: ImageInfo):
         name = img['ID']
 
     # check=False, because docker rmi might fail if e.g. the image has already been removed from outside this script.
-    subprocess.run(['docker', 'rmi', name], check=False)
+    subprocess.run(['docker', 'rmi', name], check=False, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
 
 def delete_container(container: ContainerInfo):
     # check=False, because docker rmi might fail if e.g. the image has already been removed from outside this script.
-    subprocess.run(['docker', 'rm', container['ID']], check=False)
+    subprocess.run(['docker', 'rm', container['ID']], check=False, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
 
 def filter_images(image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]], keyword: str):
