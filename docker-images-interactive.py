@@ -93,7 +93,10 @@ def delete_container(container: ContainerInfo):
     subprocess.run(['docker', 'rm', container['ID']], check=False, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 
 
-def filter_images(image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]], keyword: str):
+def filter_images(
+    image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]],
+    keyword: str
+) -> List[Tuple[ImageInfo, List[ContainerInfo]]]:
     """Filter image pairs based on keyword in repository:tag"""
     if not keyword:
         return image_pairs
@@ -106,6 +109,18 @@ def filter_images(image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]], keyw
             filtered.append((img, containers))
 
     return filtered
+
+
+def filter_containers(
+    containers: List[ContainerInfo],
+    keyword: str
+) -> List[ContainerInfo]:
+    """Filter containers based on keyword in repository:tag"""
+    if not keyword:
+        return containers
+
+    containers = [container for container in containers if keyword.lower() in container['Image']]
+    return containers
 
 
 def display_editable_text(stdscr: curses.window, text: str, cursor_position: int, y: int, x: int):
@@ -366,6 +381,11 @@ class ContainerView:
         self.max_display_lines = 0
         self.scroll_offset = 0
 
+        self.search_mode = False
+        self.search_keyword = ""
+        self.saved_search_keyword = ""
+        self.search_cursor_pos = 0
+
     def display(self) -> None:
         max_y, _ = self.stdscr.getmaxyx()
         self.max_display_lines = max_y - 2  # Reserve 2 lines for header and instructions
@@ -383,6 +403,12 @@ class ContainerView:
         # Ensure scroll offset is not negative
         self.scroll_offset = max(0, self.scroll_offset)
 
+        display_containers = self.containers
+        # Apply filtering if in search mode
+        used_search_keyword = self.search_keyword if self.search_mode else self.saved_search_keyword
+        if used_search_keyword:
+            display_containers = filter_containers(self.containers, used_search_keyword)
+
         headers = [' ', 'CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'NAMES']
         columns_width = compute_columns_width(
             [len(h) for h in headers],
@@ -394,12 +420,12 @@ class ContainerView:
                 cont['RunningFor'],
                 cont['Status'],
                 cont['Names']
-            ] for cont in self.containers)
+            ] for cont in display_containers)
         )
 
         self.stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
 
-        for display_idx, container in enumerate(self.containers[self.scroll_offset:][:self.max_display_lines]):
+        for display_idx, container in enumerate(display_containers[self.scroll_offset:][:self.max_display_lines]):
             line = format_columns(zip(
                 [
                     '>' if display_idx in self.selected_containers else ' ',
@@ -417,7 +443,11 @@ class ContainerView:
             else:
                 self.stdscr.addstr(1+display_idx, 0, line)
 
-        if self.confirm_delete_mode:
+        if self.search_mode:
+            self.stdscr.addstr(max_y-1, 0, "Search: ")
+            search_start_x = 8  # Position after "Search: "
+            display_editable_text(self.stdscr, self.search_keyword, self.search_cursor_pos, max_y-1, search_start_x)
+        elif self.confirm_delete_mode:
             if len(self.selected_containers) > 0:
                 self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.selected_containers)} containers? (y/n) [Y to skip confirmation]")
             else:
@@ -440,9 +470,43 @@ class ContainerView:
         self.containers = list_docker_containers()
         self.current_container = min(self.current_container, len(self.containers)-1)
 
-    # pylint: disable=too-many-branches
+    # pylint: disable=too-many-branches,too-many-statements
     def handle_input(self, k: int) -> bool:
-        if self.confirm_delete_mode:
+        if self.search_mode:
+            self.current_container = 0
+
+            if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
+                # Validate and save the search keyword
+                self.saved_search_keyword = self.search_keyword
+                self.search_mode = False
+                self.search_cursor_pos = 0
+            elif k == curses.ascii.ESC:  # ESC key
+                # Cancel search mode
+                self.search_mode = False
+                self.search_keyword = ""
+                self.search_cursor_pos = 0
+            elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
+                # Backspace
+                if self.search_cursor_pos > 0:
+                    self.search_keyword = self.search_keyword[:self.search_cursor_pos-1] + self.search_keyword[self.search_cursor_pos:]
+                    self.search_cursor_pos -= 1
+            elif k == curses.KEY_LEFT:
+                # Left arrow - move cursor left
+                if self.search_cursor_pos > 0:
+                    self.search_cursor_pos -= 1
+            elif k == curses.KEY_RIGHT:
+                # Right arrow - move cursor right
+                if self.search_cursor_pos < len(self.search_keyword):
+                    self.search_cursor_pos += 1
+            elif k == curses.KEY_DC:  # Delete key
+                # Delete character at cursor position
+                if self.search_cursor_pos < len(self.search_keyword):
+                    self.search_keyword = self.search_keyword[:self.search_cursor_pos] + self.search_keyword[self.search_cursor_pos+1:]
+            elif 32 <= k <= 126:  # Printable characters
+                # Add character to search keyword at cursor position
+                self.search_keyword = self.search_keyword[:self.search_cursor_pos] + chr(k) + self.search_keyword[self.search_cursor_pos:]
+                self.search_cursor_pos += 1
+        elif self.confirm_delete_mode:
             if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 if k == ord('Y'):
                     self.config.enable_delete_confirmation = False
@@ -486,8 +550,10 @@ class ContainerView:
                 self.selected_containers.clear()
                 self.current_container = 0
             elif k == ord('/'):
-                # Enter search mode (not implemented here)
-                pass
+                # Enter search mode
+                self.search_mode = True
+                self.search_keyword = self.saved_search_keyword  # Use the saved keyword when entering search mode
+                self.search_cursor_pos = len(self.search_keyword)  # Set cursor to end of keyword
             elif k == ord(' '):  # Space key
                 if self.current_container in self.selected_containers:
                     self.selected_containers.remove(self.current_container)
