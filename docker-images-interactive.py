@@ -159,51 +159,51 @@ def pretty_id_or_name(value: str, sz: int | None) -> str:
 
 
 class Filter:
-    enabled = False
-    search_keyword = ""
-    saved_search_keyword = ""
-    search_cursor_pos = 0
+    editing = False
+    live_keyword = ""
+    saved_keyword = ""
+    cursor_pos = 0
 
     def get_effective_keyword(self):
-        return self.search_keyword if self.enabled else self.saved_search_keyword
+        return self.live_keyword if self.editing else self.saved_keyword
 
-    def enable(self):
-        self.enabled = True
-        self.search_keyword = self.saved_search_keyword  # Use the saved keyword when entering search mode
-        self.search_cursor_pos = len(self.search_keyword)  # Set cursor to end of keyword
+    def enable_edit(self):
+        self.editing = True
+        self.live_keyword = self.saved_keyword  # Use the saved keyword when entering search mode
+        self.cursor_pos = len(self.live_keyword)  # Set cursor to end of keyword
 
     def handle_input(self, k: int):
         if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
             # Validate and save the search keyword
-            self.saved_search_keyword = self.search_keyword
-            self.enabled = False
-            self.search_cursor_pos = 0
+            self.saved_keyword = self.live_keyword
+            self.editing = False
+            self.cursor_pos = 0
         elif k == curses.ascii.ESC:  # ESC key
             # Cancel search mode
-            self.enabled = False
-            self.search_keyword = ""
-            self.search_cursor_pos = 0
+            self.editing = False
+            self.live_keyword = ""
+            self.cursor_pos = 0
         elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
             # Backspace
-            if self.search_cursor_pos > 0:
-                self.search_keyword = self.search_keyword[:self.search_cursor_pos-1] + self.search_keyword[self.search_cursor_pos:]
-                self.search_cursor_pos -= 1
+            if self.cursor_pos > 0:
+                self.live_keyword = self.live_keyword[:self.cursor_pos-1] + self.live_keyword[self.cursor_pos:]
+                self.cursor_pos -= 1
         elif k == curses.KEY_LEFT:
             # Left arrow - move cursor left
-            if self.search_cursor_pos > 0:
-                self.search_cursor_pos -= 1
+            if self.cursor_pos > 0:
+                self.cursor_pos -= 1
         elif k == curses.KEY_RIGHT:
             # Right arrow - move cursor right
-            if self.search_cursor_pos < len(self.search_keyword):
-                self.search_cursor_pos += 1
+            if self.cursor_pos < len(self.live_keyword):
+                self.cursor_pos += 1
         elif k == curses.KEY_DC:  # Delete key
             # Delete character at cursor position
-            if self.search_cursor_pos < len(self.search_keyword):
-                self.search_keyword = self.search_keyword[:self.search_cursor_pos] + self.search_keyword[self.search_cursor_pos+1:]
+            if self.cursor_pos < len(self.live_keyword):
+                self.live_keyword = self.live_keyword[:self.cursor_pos] + self.live_keyword[self.cursor_pos+1:]
         elif 32 <= k <= 126:  # Printable characters
             # Add character to search keyword at cursor position
-            self.search_keyword = self.search_keyword[:self.search_cursor_pos] + chr(k) + self.search_keyword[self.search_cursor_pos:]
-            self.search_cursor_pos += 1
+            self.live_keyword = self.live_keyword[:self.cursor_pos] + chr(k) + self.live_keyword[self.cursor_pos:]
+            self.cursor_pos += 1
 
 
 # pylint: disable=too-many-instance-attributes
@@ -225,6 +225,18 @@ class ListController:
         self.get_list_length = get_list_length
         self.on_refresh = on_refresh
         self.on_delete = on_delete
+
+    def adjust_offset(self, max_display_lines: int):
+        self.max_display_lines = max_display_lines
+
+        # Calculate scroll offset to keep selected item visible
+        if self.current < self.scroll_offset:
+            self.scroll_offset = self.current
+        elif self.current >= self.scroll_offset + self.max_display_lines:
+            self.scroll_offset = self.current - self.max_display_lines + 1
+
+        # Ensure scroll offset is not negative
+        self.scroll_offset = max(0, self.scroll_offset)
 
     # pylint: disable=too-many-branches,too-many-return-statements
     def handle_input(self, k: int):
@@ -274,7 +286,7 @@ class ListController:
             self.on_refresh()
             return True
         elif k == ord('/'):
-            self.filter.enable()
+            self.filter.enable_edit()
             return True
         elif k == ord(' '):  # Space key
             if self.current in self.selected_items:
@@ -286,7 +298,6 @@ class ListController:
         return None
 
 
-# pylint: disable=too-many-instance-attributes
 class ImageView:
     def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
@@ -329,16 +340,12 @@ class ImageView:
 
     def display(self) -> None:
         max_y, _ = self.stdscr.getmaxyx()
-        self.list_controller.max_display_lines = max_y - 2  # Reserve 2 lines for header and instructions
 
-        # Calculate scroll offset to keep selected item visible
-        if self.list_controller.current < self.list_controller.scroll_offset:
-            self.list_controller.scroll_offset = self.list_controller.current
-        elif self.list_controller.current >= self.list_controller.scroll_offset + self.list_controller.max_display_lines:
-            self.list_controller.scroll_offset = self.list_controller.current - self.list_controller.max_display_lines + 1
+        if not self.image_container_pairs:
+            self.stdscr.addstr(1, 0, "No image found.")
+            return
 
-        # Ensure scroll offset is not negative
-        self.list_controller.scroll_offset = max(0, self.list_controller.scroll_offset)
+        self.list_controller.adjust_offset(max_display_lines=max_y - 2)  # Reserve 2 lines for header and instructions
 
         display_pairs = filter_images(self.image_container_pairs, self.filter.get_effective_keyword())
 
@@ -378,21 +385,35 @@ class ImageView:
             else:
                 self.stdscr.addstr(1+display_idx, 0, line)
 
-        if self.filter.enabled:
+        if self.filter.editing:
             self.stdscr.addstr(max_y-1, 0, "Search: ")
-            search_start_x = 8  # Position after "Search: "
-            display_editable_text(self.stdscr, self.filter.search_keyword, self.filter.search_cursor_pos, max_y-1, search_start_x)
+            display_editable_text(
+                self.stdscr,
+                self.filter.live_keyword,
+                self.filter.cursor_pos,
+                max_y-1,
+                8  # Position after "Search: "
+            )
         elif self.confirm_delete_mode:
             if len(self.list_controller.selected_items) > 0:
-                self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.list_controller.selected_items)} images? (y/n) [Y to skip confirmation]")
+                self.stdscr.addstr(
+                    max_y-1, 0,
+                    f"Delete {len(self.list_controller.selected_items)} images? (y/n) [Y to skip confirmation]"
+                )
             else:
                 image = display_pairs[self.list_controller.current][0]
-                self.stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n) [Y to skip confirmation]")
+                self.stdscr.addstr(
+                    max_y-1, 0,
+                    f"Delete image {image['Repository']}:{image['Tag']}? (y/n) [Y to skip confirmation]"
+                )
         else:
-            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search, v: container list view)")
+            self.stdscr.addstr(
+                max_y-1, 0,
+                "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search, v: container list view)"
+            )
 
     def handle_input(self, k: int) -> bool:
-        if self.filter.enabled:
+        if self.filter.editing:
             self.list_controller.current = 0
             self.filter.handle_input(k)
         elif self.confirm_delete_mode:
@@ -453,20 +474,12 @@ class ContainerView:
 
     def display(self) -> None:
         max_y, _ = self.stdscr.getmaxyx()
-        self.list_controller.max_display_lines = max_y - 2  # Reserve 2 lines for header and instructions
 
         if not self.containers:
-            self.stdscr.addstr(1, 0, "No containers found.")
+            self.stdscr.addstr(1, 0, "No container found.")
             return
 
-        # Calculate scroll offset to keep selected item visible
-        if self.list_controller.current < self.list_controller.scroll_offset:
-            self.list_controller.scroll_offset = self.list_controller.current
-        elif self.list_controller.current >= self.list_controller.scroll_offset + self.list_controller.max_display_lines:
-            self.list_controller.scroll_offset = self.list_controller.current - self.list_controller.max_display_lines + 1
-
-        # Ensure scroll offset is not negative
-        self.list_controller.scroll_offset = max(0, self.list_controller.scroll_offset)
+        self.list_controller.adjust_offset(max_display_lines=max_y - 2)  # Reserve 2 lines for header and instructions
 
         display_containers = filter_containers(self.containers, self.filter.get_effective_keyword())
 
@@ -505,21 +518,34 @@ class ContainerView:
             else:
                 self.stdscr.addstr(1+display_idx, 0, line)
 
-        if self.filter.enabled:
+        if self.filter.editing:
             self.stdscr.addstr(max_y-1, 0, "Search: ")
-            search_start_x = 8  # Position after "Search: "
-            display_editable_text(self.stdscr, self.filter.search_keyword, self.filter.search_cursor_pos, max_y-1, search_start_x)
+            display_editable_text(
+                self.stdscr,
+                self.filter.live_keyword,
+                self.filter.cursor_pos,
+                max_y-1,
+                8  # Position after "Search: "
+            )
         elif self.confirm_delete_mode:
             if len(self.list_controller.selected_items) > 0:
-                self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.list_controller.selected_items)} containers? (y/n) [Y to skip confirmation]")
+                self.stdscr.addstr(
+                    max_y-1,
+                    0,
+                    f"Delete {len(self.list_controller.selected_items)} containers? (y/n) [Y to skip confirmation]"
+                )
             else:
                 container = self.containers[self.list_controller.current]
-                self.stdscr.addstr(max_y-1, 0, f"Delete container {container['ID'][:8]} - {container['Names']}? (y/n) [Y to skip confirmation]")
+                self.stdscr.addstr(
+                    max_y-1,
+                    0,
+                    f"Delete container {container['ID'][:8]} - {container['Names']}? (y/n) [Y to skip confirmation]"
+                )
         else:
             self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, v: image list view)")
 
     def handle_input(self, k: int) -> bool:
-        if self.filter.enabled:
+        if self.filter.editing:
             self.list_controller.current = 0
             self.filter.handle_input(k)
         elif self.confirm_delete_mode:
