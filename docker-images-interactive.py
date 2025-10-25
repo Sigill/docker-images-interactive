@@ -168,8 +168,58 @@ def pretty_id_or_name(value: str, sz: int | None) -> str:
     return value
 
 
+class Filter:
+    enabled = False
+    search_keyword = ""
+    saved_search_keyword = ""
+    search_cursor_pos = 0
+
+    def get_effective_keyword(self):
+        return self.search_keyword if self.enabled else self.saved_search_keyword
+
+    def enable(self):
+        self.enabled = True
+        self.search_keyword = self.saved_search_keyword  # Use the saved keyword when entering search mode
+        self.search_cursor_pos = len(self.search_keyword)  # Set cursor to end of keyword
+
+    def handle_input(self, k: int):
+        if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
+            # Validate and save the search keyword
+            self.saved_search_keyword = self.search_keyword
+            self.enabled = False
+            self.search_cursor_pos = 0
+        elif k == curses.ascii.ESC:  # ESC key
+            # Cancel search mode
+            self.enabled = False
+            self.search_keyword = ""
+            self.search_cursor_pos = 0
+        elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
+            # Backspace
+            if self.search_cursor_pos > 0:
+                self.search_keyword = self.search_keyword[:self.search_cursor_pos-1] + self.search_keyword[self.search_cursor_pos:]
+                self.search_cursor_pos -= 1
+        elif k == curses.KEY_LEFT:
+            # Left arrow - move cursor left
+            if self.search_cursor_pos > 0:
+                self.search_cursor_pos -= 1
+        elif k == curses.KEY_RIGHT:
+            # Right arrow - move cursor right
+            if self.search_cursor_pos < len(self.search_keyword):
+                self.search_cursor_pos += 1
+        elif k == curses.KEY_DC:  # Delete key
+            # Delete character at cursor position
+            if self.search_cursor_pos < len(self.search_keyword):
+                self.search_keyword = self.search_keyword[:self.search_cursor_pos] + self.search_keyword[self.search_cursor_pos+1:]
+        elif 32 <= k <= 126:  # Printable characters
+            # Add character to search keyword at cursor position
+            self.search_keyword = self.search_keyword[:self.search_cursor_pos] + chr(k) + self.search_keyword[self.search_cursor_pos:]
+            self.search_cursor_pos += 1
+
+
 # pylint: disable=too-many-instance-attributes
 class ImageView:
+    filter = Filter()
+
     def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
         self.config = config
@@ -183,11 +233,6 @@ class ImageView:
 
         self.max_display_lines = 0
         self.scroll_offset = 0
-
-        self.search_mode = False
-        self.search_keyword = ""
-        self.saved_search_keyword = ""
-        self.search_cursor_pos = 0
 
     def display(self) -> None:
         max_y, _ = self.stdscr.getmaxyx()
@@ -204,7 +249,7 @@ class ImageView:
 
         display_pairs = self.image_container_pairs
         # Apply filtering if in search mode
-        used_search_keyword = self.search_keyword if self.search_mode else self.saved_search_keyword
+        used_search_keyword = self.filter.get_effective_keyword()
         if used_search_keyword:
             display_pairs = filter_images(self.image_container_pairs, used_search_keyword)
 
@@ -244,10 +289,10 @@ class ImageView:
             else:
                 self.stdscr.addstr(1+display_idx, 0, line)
 
-        if self.search_mode:
+        if self.filter.enabled:
             self.stdscr.addstr(max_y-1, 0, "Search: ")
             search_start_x = 8  # Position after "Search: "
-            display_editable_text(self.stdscr, self.search_keyword, self.search_cursor_pos, max_y-1, search_start_x)
+            display_editable_text(self.stdscr, self.filter.search_keyword, self.filter.search_cursor_pos, max_y-1, search_start_x)
         elif self.confirm_delete_mode:
             if len(self.selected_images) > 0:
                 self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.selected_images)} images? (y/n) [Y to skip confirmation]")
@@ -273,40 +318,9 @@ class ImageView:
 
     # pylint: disable=too-many-branches,too-many-statements
     def handle_input(self, k: int) -> bool:
-        if self.search_mode:
+        if self.filter.enabled:
             self.current_image = 0
-
-            if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
-                # Validate and save the search keyword
-                self.saved_search_keyword = self.search_keyword
-                self.search_mode = False
-                self.search_cursor_pos = 0
-            elif k == curses.ascii.ESC:  # ESC key
-                # Cancel search mode
-                self.search_mode = False
-                self.search_keyword = ""
-                self.search_cursor_pos = 0
-            elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
-                # Backspace
-                if self.search_cursor_pos > 0:
-                    self.search_keyword = self.search_keyword[:self.search_cursor_pos-1] + self.search_keyword[self.search_cursor_pos:]
-                    self.search_cursor_pos -= 1
-            elif k == curses.KEY_LEFT:
-                # Left arrow - move cursor left
-                if self.search_cursor_pos > 0:
-                    self.search_cursor_pos -= 1
-            elif k == curses.KEY_RIGHT:
-                # Right arrow - move cursor right
-                if self.search_cursor_pos < len(self.search_keyword):
-                    self.search_cursor_pos += 1
-            elif k == curses.KEY_DC:  # Delete key
-                # Delete character at cursor position
-                if self.search_cursor_pos < len(self.search_keyword):
-                    self.search_keyword = self.search_keyword[:self.search_cursor_pos] + self.search_keyword[self.search_cursor_pos+1:]
-            elif 32 <= k <= 126:  # Printable characters
-                # Add character to search keyword at cursor position
-                self.search_keyword = self.search_keyword[:self.search_cursor_pos] + chr(k) + self.search_keyword[self.search_cursor_pos:]
-                self.search_cursor_pos += 1
+            self.filter.handle_input(k)
         elif self.confirm_delete_mode:
             if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 if k == ord('Y'):
@@ -353,10 +367,7 @@ class ImageView:
                 self.selected_images.clear()
                 self.current_image = 0
             elif k == ord('/'):
-                # Enter search mode
-                self.search_mode = True
-                self.search_keyword = self.saved_search_keyword  # Use the saved keyword when entering search mode
-                self.search_cursor_pos = len(self.search_keyword)  # Set cursor to end of keyword
+                self.filter.enable()
             elif k == ord(' '):  # Space key
                 if self.current_image in self.selected_images:
                     self.selected_images.remove(self.current_image)
@@ -367,6 +378,8 @@ class ImageView:
 
 
 class ContainerView:
+    filter = Filter()
+
     def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
         self.config = config
@@ -380,11 +393,6 @@ class ContainerView:
 
         self.max_display_lines = 0
         self.scroll_offset = 0
-
-        self.search_mode = False
-        self.search_keyword = ""
-        self.saved_search_keyword = ""
-        self.search_cursor_pos = 0
 
     def display(self) -> None:
         max_y, _ = self.stdscr.getmaxyx()
@@ -405,7 +413,7 @@ class ContainerView:
 
         display_containers = self.containers
         # Apply filtering if in search mode
-        used_search_keyword = self.search_keyword if self.search_mode else self.saved_search_keyword
+        used_search_keyword = self.filter.get_effective_keyword()
         if used_search_keyword:
             display_containers = filter_containers(self.containers, used_search_keyword)
 
@@ -443,10 +451,10 @@ class ContainerView:
             else:
                 self.stdscr.addstr(1+display_idx, 0, line)
 
-        if self.search_mode:
+        if self.filter.enabled:
             self.stdscr.addstr(max_y-1, 0, "Search: ")
             search_start_x = 8  # Position after "Search: "
-            display_editable_text(self.stdscr, self.search_keyword, self.search_cursor_pos, max_y-1, search_start_x)
+            display_editable_text(self.stdscr, self.filter.search_keyword, self.filter.search_cursor_pos, max_y-1, search_start_x)
         elif self.confirm_delete_mode:
             if len(self.selected_containers) > 0:
                 self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.selected_containers)} containers? (y/n) [Y to skip confirmation]")
@@ -472,40 +480,9 @@ class ContainerView:
 
     # pylint: disable=too-many-branches,too-many-statements
     def handle_input(self, k: int) -> bool:
-        if self.search_mode:
+        if self.filter.enabled:
             self.current_container = 0
-
-            if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
-                # Validate and save the search keyword
-                self.saved_search_keyword = self.search_keyword
-                self.search_mode = False
-                self.search_cursor_pos = 0
-            elif k == curses.ascii.ESC:  # ESC key
-                # Cancel search mode
-                self.search_mode = False
-                self.search_keyword = ""
-                self.search_cursor_pos = 0
-            elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
-                # Backspace
-                if self.search_cursor_pos > 0:
-                    self.search_keyword = self.search_keyword[:self.search_cursor_pos-1] + self.search_keyword[self.search_cursor_pos:]
-                    self.search_cursor_pos -= 1
-            elif k == curses.KEY_LEFT:
-                # Left arrow - move cursor left
-                if self.search_cursor_pos > 0:
-                    self.search_cursor_pos -= 1
-            elif k == curses.KEY_RIGHT:
-                # Right arrow - move cursor right
-                if self.search_cursor_pos < len(self.search_keyword):
-                    self.search_cursor_pos += 1
-            elif k == curses.KEY_DC:  # Delete key
-                # Delete character at cursor position
-                if self.search_cursor_pos < len(self.search_keyword):
-                    self.search_keyword = self.search_keyword[:self.search_cursor_pos] + self.search_keyword[self.search_cursor_pos+1:]
-            elif 32 <= k <= 126:  # Printable characters
-                # Add character to search keyword at cursor position
-                self.search_keyword = self.search_keyword[:self.search_cursor_pos] + chr(k) + self.search_keyword[self.search_cursor_pos:]
-                self.search_cursor_pos += 1
+            self.filter.handle_input(k)
         elif self.confirm_delete_mode:
             if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 if k == ord('Y'):
@@ -550,10 +527,7 @@ class ContainerView:
                 self.selected_containers.clear()
                 self.current_container = 0
             elif k == ord('/'):
-                # Enter search mode
-                self.search_mode = True
-                self.search_keyword = self.saved_search_keyword  # Use the saved keyword when entering search mode
-                self.search_cursor_pos = len(self.search_keyword)  # Set cursor to end of keyword
+                self.filter.enable()
             elif k == ord(' '):  # Space key
                 if self.current_container in self.selected_containers:
                     self.selected_containers.remove(self.current_container)
