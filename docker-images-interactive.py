@@ -338,9 +338,7 @@ class ImageView:
         self._refresh()
         self.list_controller.current = min(self.list_controller.current, len(self.image_container_pairs)-1)
 
-    def display(self) -> None:
-        max_y, _ = self.stdscr.getmaxyx()
-
+    def display(self, max_y: int) -> None:
         if not self.image_container_pairs:
             self.stdscr.addstr(1, 0, "No image found.")
             return
@@ -366,8 +364,12 @@ class ImageView:
         self.stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
 
         # Display only the visible range of images
-        for display_idx, (img, containers) in enumerate(display_pairs[self.list_controller.scroll_offset:][:self.list_controller.max_display_lines]):
-            idx = display_idx + self.list_controller.scroll_offset
+        for line_idx, (idx, (img, containers)) in enumerate(
+            enumerate(
+                display_pairs[self.list_controller.scroll_offset:][:self.list_controller.max_display_lines],
+                start=self.list_controller.scroll_offset
+            )
+        ):
             line = format_columns(zip(
                 [
                     '>' if idx in self.list_controller.selected_items else ' ',
@@ -381,9 +383,9 @@ class ImageView:
                 columns_width
             ))
             if idx == self.list_controller.current:
-                self.stdscr.addstr(1+display_idx, 0, line, curses.A_REVERSE)
+                self.stdscr.addstr(1+line_idx, 0, line, curses.A_REVERSE)
             else:
-                self.stdscr.addstr(1+display_idx, 0, line)
+                self.stdscr.addstr(1+line_idx, 0, line)
 
         if self.filter.editing:
             self.stdscr.addstr(max_y-1, 0, "Search: ")
@@ -472,9 +474,7 @@ class ContainerView:
         self._refresh()
         self.list_controller.current = min(self.list_controller.current, len(self.containers)-1)
 
-    def display(self) -> None:
-        max_y, _ = self.stdscr.getmaxyx()
-
+    def display(self, max_y: int) -> None:
         if not self.containers:
             self.stdscr.addstr(1, 0, "No container found.")
             return
@@ -499,11 +499,15 @@ class ContainerView:
 
         self.stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
 
-        for display_idx, container in enumerate(display_containers[self.list_controller.scroll_offset:][:self.list_controller.max_display_lines]):
-            idx = display_idx + self.list_controller.scroll_offset
+        for line_idx, (idx, container) in enumerate(
+            enumerate(
+                self.containers[self.list_controller.scroll_offset:][:self.list_controller.max_display_lines],
+                start=self.list_controller.scroll_offset
+            )
+        ):
             line = format_columns(zip(
                 [
-                    '>' if display_idx in self.list_controller.selected_items else ' ',
+                    '>' if line_idx in self.list_controller.selected_items else ' ',
                     container['ID'][:12],
                     pretty_id_or_name(container['Image'], 12),
                     container['Command'],
@@ -514,9 +518,9 @@ class ContainerView:
                 columns_width
             ))
             if idx == self.list_controller.current:
-                self.stdscr.addstr(1+display_idx, 0, line, curses.A_REVERSE)
+                self.stdscr.addstr(1+line_idx, 0, line, curses.A_REVERSE)
             else:
-                self.stdscr.addstr(1+display_idx, 0, line)
+                self.stdscr.addstr(1+line_idx, 0, line)
 
         if self.filter.editing:
             self.stdscr.addstr(max_y-1, 0, "Search: ")
@@ -576,7 +580,8 @@ def main_curses(stdscr: curses.window, config: Config):
     view: ImageView | ContainerView = ImageView(stdscr, config)
 
     while True:
-        view.display()
+        max_y, _ = stdscr.getmaxyx()
+        view.display(max_y)
         stdscr.refresh()
 
         k = stdscr.getch()
