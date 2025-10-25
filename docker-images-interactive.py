@@ -4,12 +4,7 @@ import curses.ascii
 import json
 import subprocess
 import sys
-from typing import Any, Callable, Final, Iterable, List, Sequence, Set, Tuple, TypedDict, Union
-
-
-# pylint: disable=too-few-public-methods
-class Config():
-    enable_delete_confirmation: bool = True
+from typing import Any, Callable, Final, Iterable, List, Sequence, Tuple, TypedDict, Union
 
 
 # Docker image fields from 'docker images --format {{json .}}'
@@ -217,7 +212,6 @@ class ListController:
         self.filter = Filter()
 
         self.current: int = 0
-        self.selected_items: Set[int] = set()
 
         self.max_display_lines = 0
         self.scroll_offset = 0
@@ -280,7 +274,6 @@ class ListController:
         elif k == ord('q') or k == curses.ascii.ESC:
             return False
         elif k == ord('r') or k == curses.KEY_F5:  # Refresh
-            self.selected_items.clear()
             self.current = 0
 
             self.on_refresh()
@@ -288,61 +281,38 @@ class ListController:
         elif k == ord('/'):
             self.filter.enable_edit()
             return True
-        elif k == ord(' '):  # Space key
-            if self.current in self.selected_items:
-                self.selected_items.remove(self.current)
-            else:
-                self.selected_items.add(self.current)
-            return True
 
         return None
 
 
 class ImageView:
-    HEADERS: Final[List[str]] = [' ', 'IMAGE ID', 'REPOSITORY', 'TAG', 'SIZE', 'CREATED', 'USED']
+    HEADERS: Final[List[str]] = ['IMAGE ID', 'REPOSITORY', 'TAG', 'SIZE', 'CREATED', 'USED']
 
-    def __init__(self, stdscr: curses.window, config: Config):
+    def __init__(self, stdscr: curses.window):
         self.stdscr = stdscr
-        self.config = config
 
         self._refresh()
 
         self.list_controller = ListController(
             get_list_length=lambda: len(self.image_container_pairs),
             on_refresh=self._refresh,
-            on_delete=self._on_delete
+            on_delete=self._delete_selected_images
         )
 
         self.filter = self.list_controller.filter
 
-        self.confirm_delete_mode = False
-
     def _refresh(self):
         self.image_container_pairs = get_images_with_containers()
 
-    def _on_delete(self):
-        if self.config.enable_delete_confirmation:
-            self.confirm_delete_mode = True
-        else:
-            self._delete_selected_images()
-
     def _delete_selected_images(self) -> None:
-        if len(self.list_controller.selected_items) == 0:
-            img, _ = self.image_container_pairs[self.list_controller.current]
-            delete_image(img)
-        else:
-            for idx in self.list_controller.selected_items:
-                img, _ = self.image_container_pairs[idx]
-                delete_image(img)
-
-            self.list_controller.selected_items.clear()
+        img, _ = self.image_container_pairs[self.list_controller.current]
+        delete_image(img)
 
         self._refresh()
         self.list_controller.current = min(self.list_controller.current, len(self.image_container_pairs)-1)
 
-    def _columns(self, idx: int, img: ImageInfo, containers: Sequence[ContainerInfo]):
+    def _columns(self, img: ImageInfo, containers: Sequence[ContainerInfo]):
         return [
-            '>' if idx in self.list_controller.selected_items else ' ',
             remove_prefix(value=img['ID'], prefix='sha256:')[:12],
             img['Repository'],
             img['Tag'],
@@ -362,7 +332,7 @@ class ImageView:
 
         columns_width = compute_columns_width(
             [len(h) for h in self.HEADERS],
-            (self._columns(i, img, containers) for i, (img, containers) in enumerate(display_pairs))
+            (self._columns(img, containers) for (img, containers) in display_pairs)
         )
 
         self.stdscr.addstr(0, 0, format_columns(zip(self.HEADERS, columns_width)))
@@ -374,7 +344,7 @@ class ImageView:
                 start=self.list_controller.scroll_offset
             )
         ):
-            line = format_columns(zip(self._columns(idx, img, containers), columns_width))
+            line = format_columns(zip(self._columns(img, containers), columns_width))
             if idx == self.list_controller.current:
                 self.stdscr.addstr(1+line_idx, 0, line, curses.A_REVERSE)
             else:
@@ -389,18 +359,6 @@ class ImageView:
                 max_y-1,
                 8  # Position after "Search: "
             )
-        elif self.confirm_delete_mode:
-            if len(self.list_controller.selected_items) > 0:
-                self.stdscr.addstr(
-                    max_y-1, 0,
-                    f"Delete {len(self.list_controller.selected_items)} images? (y/n) [Y to skip confirmation]"
-                )
-            else:
-                image = display_pairs[self.list_controller.current][0]
-                self.stdscr.addstr(
-                    max_y-1, 0,
-                    f"Delete image {image['Repository']}:{image['Tag']}? (y/n) [Y to skip confirmation]"
-                )
         else:
             self.stdscr.addstr(
                 max_y-1, 0,
@@ -411,15 +369,6 @@ class ImageView:
         if self.filter.editing:
             self.list_controller.current = 0
             self.filter.handle_input(k)
-        elif self.confirm_delete_mode:
-            if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
-                if k == ord('Y'):
-                    self.config.enable_delete_confirmation = False
-
-                self._delete_selected_images()
-                self.confirm_delete_mode = False
-            elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
-                self.confirm_delete_mode = False
         else:
             status = self.list_controller.handle_input(k)
             return status if status is not None else True
@@ -428,50 +377,33 @@ class ImageView:
 
 
 class ContainerView:
-    HEADERS: Final[List[str]] = [' ', 'CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'NAMES']
+    HEADERS: Final[List[str]] = ['CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'NAMES']
 
-    def __init__(self, stdscr: curses.window, config: Config):
+    def __init__(self, stdscr: curses.window):
         self.stdscr = stdscr
-        self.config = config
 
         self._refresh()
 
         self.list_controller = ListController(
             get_list_length=lambda: len(self.containers),
             on_refresh=self._refresh,
-            on_delete=self._on_delete
+            on_delete=self._delete_selected_containers
         )
 
         self.filter = self.list_controller.filter
 
-        self.confirm_delete_mode = False
-
     def _refresh(self):
         self.containers = list_docker_containers()
 
-    def _on_delete(self):
-        if self.config.enable_delete_confirmation:
-            self.confirm_delete_mode = True
-        else:
-            self._delete_selected_containers()
-
     def _delete_selected_containers(self) -> None:
-        if len(self.list_controller.selected_items) == 0:
-            container = self.containers[self.list_controller.current]
-            delete_container(container)
-        else:
-            for idx in self.list_controller.selected_items:
-                container = self.containers[idx]
-                delete_container(container)
-
-            self.list_controller.selected_items.clear()
+        container = self.containers[self.list_controller.current]
+        delete_container(container)
 
         self._refresh()
         self.list_controller.current = min(self.list_controller.current, len(self.containers)-1)
 
-    def _columns(self, idx: int, container: ContainerInfo):
+    def _columns(self, container: ContainerInfo):
         return [
-            '>' if idx in self.list_controller.selected_items else ' ',
             container['ID'][:12],
             pretty_id_or_name(container['Image'], 12),
             container['Command'],
@@ -491,7 +423,7 @@ class ContainerView:
 
         columns_width = compute_columns_width(
             [len(h) for h in self.HEADERS],
-            (self._columns(i, container) for i, container in enumerate(display_containers))
+            (self._columns(container) for container in display_containers)
         )
 
         self.stdscr.addstr(0, 0, format_columns(zip(self.HEADERS, columns_width)))
@@ -502,7 +434,7 @@ class ContainerView:
                 start=self.list_controller.scroll_offset
             )
         ):
-            line = format_columns(zip(self._columns(idx, container), columns_width))
+            line = format_columns(zip(self._columns(container), columns_width))
             if idx == self.list_controller.current:
                 self.stdscr.addstr(1+line_idx, 0, line, curses.A_REVERSE)
             else:
@@ -517,20 +449,6 @@ class ContainerView:
                 max_y-1,
                 8  # Position after "Search: "
             )
-        elif self.confirm_delete_mode:
-            if len(self.list_controller.selected_items) > 0:
-                self.stdscr.addstr(
-                    max_y-1,
-                    0,
-                    f"Delete {len(self.list_controller.selected_items)} containers? (y/n) [Y to skip confirmation]"
-                )
-            else:
-                container = self.containers[self.list_controller.current]
-                self.stdscr.addstr(
-                    max_y-1,
-                    0,
-                    f"Delete container {container['ID'][:8]} - {container['Names']}? (y/n) [Y to skip confirmation]"
-                )
         else:
             self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, v: image list view)")
 
@@ -538,15 +456,6 @@ class ContainerView:
         if self.filter.editing:
             self.list_controller.current = 0
             self.filter.handle_input(k)
-        elif self.confirm_delete_mode:
-            if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
-                if k == ord('Y'):
-                    self.config.enable_delete_confirmation = False
-
-                self._delete_selected_containers()
-                self.confirm_delete_mode = False
-            elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
-                self.confirm_delete_mode = False
         else:
             status = self.list_controller.handle_input(k)
             return status if status is not None else True
@@ -570,7 +479,7 @@ def get_key_press(stdscr: curses.window) -> int:
             return key
 
 
-def main_curses(stdscr: curses.window, config: Config):
+def main_curses(stdscr: curses.window):
     curses.curs_set(0)
 
     if sys.version_info >= (3, 9):
@@ -585,7 +494,7 @@ def main_curses(stdscr: curses.window, config: Config):
         # Initialize color pair 1 for normal text with default foreground and background colors
         curses.init_pair(1, -1, -1)  # -1 means default terminal colors
 
-    view: ImageView | ContainerView = ImageView(stdscr, config)
+    view: ImageView | ContainerView = ImageView(stdscr)
 
     while True:
         max_y, _ = stdscr.getmaxyx()
@@ -597,17 +506,12 @@ def main_curses(stdscr: curses.window, config: Config):
         stdscr.erase()
 
         if k == ord('v'):  # Switch view
-            view = ContainerView(stdscr, config) if isinstance(view, ImageView) else ImageView(stdscr, config)
+            view = ContainerView(stdscr) if isinstance(view, ImageView) else ImageView(stdscr)
             continue
 
         if not view.handle_input(k):
             break
 
 
-def main():
-    config = Config()
-    curses.wrapper(lambda w: main_curses(w, config))
-
-
 if __name__ == "__main__":
-    main()
+    curses.wrapper(main_curses)
