@@ -287,10 +287,10 @@ class ImageView:
                 self.search_keyword = self.search_keyword[:self.search_cursor_pos] + chr(k) + self.search_keyword[self.search_cursor_pos:]
                 self.search_cursor_pos += 1
         elif self.confirm_delete_mode:
-            if k in [ord('y'), ord('Y')]:
+            if k in [ord('y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 self._delete_selected_images()
                 self.confirm_delete_mode = False
-            elif k in [ord('n'), ord('N'), ord('q')] or k == curses.ascii.ESC:
+            elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
             if k == curses.KEY_UP:
@@ -430,10 +430,10 @@ class ContainerView:
     # pylint: disable=too-many-branches
     def handle_input(self, k: int) -> bool:
         if self.confirm_delete_mode:
-            if k in [ord('y'), ord('Y')]:
+            if k in [ord('y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 self._delete_selected_containers()
                 self.confirm_delete_mode = False
-            elif k in [ord('n'), ord('N'), ord('q')] or k == curses.ascii.ESC:
+            elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
             if k == curses.KEY_UP:
