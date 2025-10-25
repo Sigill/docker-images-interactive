@@ -97,30 +97,20 @@ def filter_images(
     image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]],
     keyword: str
 ) -> List[Tuple[ImageInfo, List[ContainerInfo]]]:
-    """Filter image pairs based on keyword in repository:tag"""
-    if not keyword:
-        return image_pairs
-
-    filtered: List[Tuple[ImageInfo, List[ContainerInfo]]] = []
-    for img, containers in image_pairs:
-        # Create the full repository:tag string for matching
-        repo_tag = f"{img['Repository']}:{img['Tag']}"
-        if keyword.lower() in repo_tag.lower():
-            filtered.append((img, containers))
-
-    return filtered
+    """Filter image with keyword in repository:tag"""
+    return [
+        (img, containers)
+        for (img, containers) in image_pairs
+        if keyword.lower() in f"{img['Repository']}:{img['Tag']}".lower()
+    ]
 
 
 def filter_containers(
     containers: List[ContainerInfo],
     keyword: str
 ) -> List[ContainerInfo]:
-    """Filter containers based on keyword in repository:tag"""
-    if not keyword:
-        return containers
-
-    containers = [container for container in containers if keyword.lower() in container['Image']]
-    return containers
+    """Filter containers with keyword in repository:tag"""
+    return [container for container in containers if keyword.lower() in container['Image']]
 
 
 def display_editable_text(stdscr: curses.window, text: str, cursor_position: int, y: int, x: int):
@@ -350,11 +340,7 @@ class ImageView:
         # Ensure scroll offset is not negative
         self.list_controller.scroll_offset = max(0, self.list_controller.scroll_offset)
 
-        display_pairs = self.image_container_pairs
-        # Apply filtering if in search mode
-        used_search_keyword = self.filter.get_effective_keyword()
-        if used_search_keyword:
-            display_pairs = filter_images(self.image_container_pairs, used_search_keyword)
+        display_pairs = filter_images(self.image_container_pairs, self.filter.get_effective_keyword())
 
         headers = [' ', 'IMAGE ID', 'REPOSITORY', 'TAG', 'SIZE', 'CREATED', 'USED']
         columns_width = compute_columns_width(
@@ -482,11 +468,7 @@ class ContainerView:
         # Ensure scroll offset is not negative
         self.list_controller.scroll_offset = max(0, self.list_controller.scroll_offset)
 
-        display_containers = self.containers
-        # Apply filtering if in search mode
-        used_search_keyword = self.filter.get_effective_keyword()
-        if used_search_keyword:
-            display_containers = filter_containers(self.containers, used_search_keyword)
+        display_containers = filter_containers(self.containers, self.filter.get_effective_keyword())
 
         headers = [' ', 'CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'NAMES']
         columns_width = compute_columns_width(
