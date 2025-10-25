@@ -65,7 +65,11 @@ def get_images_with_containers() -> List[Tuple[ImageInfo, List[ContainerInfo]]]:
     return [(img, image_id_to_containers.get(img['ID'], [])) for img in images]
 
 
-def left_ellipsis(value: str, sz: int):
+def rell(value: str, sz: int):
+    return (value[:(sz-1)] + '…') if len(value) > sz else value
+
+
+def lell(value: str, sz: int):
     return ('…' + value[-(sz-1):]) if len(value) > sz else value
 
 
@@ -77,6 +81,11 @@ def delete_image(img: ImageInfo):
 
     # check=False, because docker rmi might fail if e.g. the image has already been removed from outside this script.
     subprocess.run(['docker', 'rmi', name], check=False)
+
+
+def delete_container(container: ContainerInfo):
+    # check=False, because docker rmi might fail if e.g. the image has already been removed from outside this script.
+    subprocess.run(['docker', 'rm', container['ID']], check=False)
 
 
 def filter_images(image_pairs: List[Tuple[ImageInfo, List[ContainerInfo]]], keyword: str):
@@ -147,14 +156,40 @@ class ImageView:
         if used_search_keyword:
             display_pairs = filter_images(self.image_container_pairs, used_search_keyword)
 
-        self.stdscr.addstr(0, 0, "  ID           REPOSITORY                       TAG              SIZE       CREATED          USED")  # noqa: E501 # pylint: disable=line-too-long
+        # pylint: disable=too-many-arguments
+        def make_line(*, selected: bool, image_id: str, repository: str, tag: str, size: str, created: str, used: str) -> str:
+            return ' '.join((
+                '>' if selected else ' ',
+                f"{image_id:12}",
+                f"{lell(repository, 32):32}",
+                f"{lell(tag, 16):16}",
+                f"{size:10}",
+                f"{created:16}",
+                f"{used:4}",
+            ))
+
+        self.stdscr.addstr(0, 0, make_line(
+            selected=False,
+            image_id='IMAGE ID',
+            repository='REPOSITORY',
+            tag='TAG',
+            size='SIZE',
+            created='CREATED',
+            used='USED'
+        ))
 
         # Display only the visible range of images
         for display_idx, (img, containers) in enumerate(display_pairs[self.scroll_offset:self.scroll_offset+self.max_display_lines]):
             idx = display_idx + self.scroll_offset
-            selected_marker = '>' if idx in self.selected_images else ' '
-            used_marker = '*' if len(containers) > 0 else ' '
-            line = f"{selected_marker} {img['ID'][:12]:12} {left_ellipsis(img['Repository'], 32):32} {left_ellipsis(img['Tag'], 16):16} {img['Size']:10} {img['CreatedSince']:16} {used_marker}"  # noqa: E501 # pylint: disable=line-too-long
+            line = make_line(
+                selected=idx in self.selected_images,
+                image_id=img['ID'],
+                repository=img['Repository'],
+                tag=img['Tag'],
+                size=img['Size'],
+                created=img['CreatedSince'],
+                used='*' if len(containers) > 0 else ' '
+            )
             if idx == self.current_image:
                 self.stdscr.addstr(1+display_idx, 0, line, curses.A_REVERSE)
             else:
@@ -171,9 +206,7 @@ class ImageView:
                 image = display_pairs[self.current_image][0]
                 self.stdscr.addstr(max_y-1, 0, f"Delete image {image['Repository']}:{image['Tag']}? (y/n)")
         else:
-            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search)")
-
-        self.stdscr.refresh()
+            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search, v: container list)")
 
     def _delete_selected_images(self) -> None:
         if len(self.selected_images) == 0:
@@ -189,7 +222,7 @@ class ImageView:
         self.image_container_pairs = get_images_with_containers()
         self.current_image = min(self.current_image, len(self.image_container_pairs)-1)
 
-    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    # pylint: disable=too-many-branches,too-many-statements
     def handle_input(self, k: int) -> bool:
         if self.search_mode:
             self.current_image = 0
@@ -278,6 +311,148 @@ class ImageView:
         return True
 
 
+class ContainerView:
+    def __init__(self, stdscr: curses.window):
+        self.stdscr = stdscr
+
+        self.containers = list_docker_containers()
+
+        self.current_container = 0
+        self.selected_containers: Set[int] = set()
+
+        self.confirm_delete_mode = False
+
+        self.max_display_lines = 0
+        self.scroll_offset = 0
+
+    def display(self) -> None:
+        max_y, _ = self.stdscr.getmaxyx()
+        self.max_display_lines = max_y - 2  # Reserve 2 lines for header and instructions
+
+        if not self.containers:
+            self.stdscr.addstr(1, 0, "No containers found.")
+            return
+
+        # Calculate scroll offset to keep selected item visible
+        if self.current_container < self.scroll_offset:
+            self.scroll_offset = self.current_container
+        elif self.current_container >= self.scroll_offset + self.max_display_lines:
+            self.scroll_offset = self.current_container - self.max_display_lines + 1
+
+        # Ensure scroll offset is not negative
+        self.scroll_offset = max(0, self.scroll_offset)
+
+        # pylint: disable=too-many-arguments
+        def make_line(*, selected: bool, container_id: str, image: str, command: str, created: str, status: str, names: str) -> str:
+            return ' '.join((
+                '>' if selected else ' ',
+                f"{container_id:12}",
+                f"{rell(image, 32):32}",
+                f"{rell(command, 20):20}",
+                f"{created:16}",
+                f"{status:24}",
+                f"{rell(names, 16):16}"
+            ))
+
+        self.stdscr.addstr(0, 0, make_line(
+            selected=False,
+            container_id='CONTAINER ID',
+            image='IMAGE',
+            command='COMMAND',
+            created='CREATED',
+            status='STATUS',
+            names='NAMES'
+        ))
+
+        for i, container in enumerate(self.containers[self.scroll_offset:self.scroll_offset + self.max_display_lines]):
+            line = make_line(
+                selected=i in self.selected_containers,
+                container_id=container['ID'],
+                image=container['Image'],
+                command=container['Command'],
+                created=container['RunningFor'],
+                status=container['Status'],
+                names=container['Names']
+            )
+            if i + self.scroll_offset == self.current_container:
+                self.stdscr.addstr(1+i, 0, line, curses.A_REVERSE)
+            else:
+                self.stdscr.addstr(1+i, 0, line)
+
+        if self.confirm_delete_mode:
+            if len(self.selected_containers) > 0:
+                self.stdscr.addstr(max_y-1, 0, f"Delete {len(self.selected_containers)} containers? (y/n)")
+            else:
+                container = self.containers[self.current_container]
+                self.stdscr.addstr(max_y-1, 0, f"Delete container {container['ID'][:8]} - {container['Names']}? (y/n)")
+        else:
+            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, v: image list)")
+
+    def _delete_selected_containers(self) -> None:
+        if len(self.selected_containers) == 0:
+            container = self.containers[self.current_container]
+            delete_container(container)
+        else:
+            for idx in self.selected_containers:
+                container = self.containers[idx]
+                delete_container(container)
+
+            self.selected_containers.clear()
+
+        self.containers = list_docker_containers()
+        self.current_container = min(self.current_container, len(self.containers)-1)
+
+    # pylint: disable=too-many-branches
+    def handle_input(self, k: int) -> bool:
+        if self.confirm_delete_mode:
+            if k in [ord('y'), ord('Y')]:
+                self._delete_selected_containers()
+                self.confirm_delete_mode = False
+            elif k in [ord('n'), ord('N'), ord('q')] or k == curses.ascii.ESC:
+                self.confirm_delete_mode = False
+        else:
+            if k == curses.KEY_UP:
+                self.current_container = max(0, self.current_container-1)
+            elif k == curses.KEY_DOWN:
+                self.current_container = min(len(self.containers)-1, self.current_container+1)
+            elif k == curses.KEY_NPAGE:  # Page Down
+                if len(self.containers) > 0:
+                    last_visible = min(self.scroll_offset + self.max_display_lines - 1, len(self.containers) - 1)
+                    if self.current_container != last_visible:
+                        self.current_container = last_visible
+                    else:
+                        self.current_container = min(self.current_container + self.max_display_lines, len(self.containers) - 1)
+            elif k == curses.KEY_PPAGE:  # Page Up
+                if len(self.containers) > 0:
+                    first_visible = self.scroll_offset
+                    if self.current_container != first_visible:
+                        self.current_container = first_visible
+                    else:
+                        self.current_container = max(self.current_container - self.max_display_lines, 0)
+            elif k == ord('g'):  # Select first container
+                self.current_container = 0
+            elif k == ord('G'):  # Select last container
+                self.current_container = len(self.containers) - 1
+            elif k == ord('d'):
+                self.confirm_delete_mode = True
+            elif k == ord('q') or k == curses.ascii.ESC:
+                return False
+            elif k == ord('r') or k == curses.KEY_F5:  # Refresh
+                self.containers = list_docker_containers()
+                self.selected_containers.clear()
+                self.current_container = 0
+            elif k == ord('/'):
+                # Enter search mode (not implemented here)
+                pass
+            elif k == ord(' '):  # Space key
+                if self.current_container in self.selected_containers:
+                    self.selected_containers.remove(self.current_container)
+                else:
+                    self.selected_containers.add(self.current_container)
+
+        return True
+
+
 def main(stdscr: curses.window):
     curses.curs_set(0)
 
@@ -287,13 +462,19 @@ def main(stdscr: curses.window):
         # Initialize color pair 1 for normal text with default foreground and background colors
         curses.init_pair(1, -1, -1)  # -1 means default terminal colors
 
-    view = ImageView(stdscr)
+    view: ImageView | ContainerView = ImageView(stdscr)
+
     while True:
         view.display()
+        stdscr.refresh()
 
         k = stdscr.getch()
         # Clear the screen. This is especially important when resizing the terminal, which send a curses.KEY_RESIZE.
         stdscr.erase()
+
+        if k == ord('v'):  # Switch view
+            view = ContainerView(stdscr) if isinstance(view, ImageView) else ImageView(stdscr)
+            continue
 
         if not view.handle_input(k):
             break
