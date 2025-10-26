@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
+import argparse
 import curses
 import curses.ascii
+from io import TextIOWrapper
 import json
 import subprocess
 import sys
-from typing import Any, Callable, Iterable, List, Set, Tuple, TypedDict, Union
+from time import time
+from typing import Any, Callable, Final, Iterable, List, Set, Tuple, TypedDict, Union
 
 
 # pylint: disable=too-few-public-methods
 class Config():
     enable_delete_confirmation: bool = True
+
+
+# pylint: disable=too-few-public-methods
+class Logger:
+    T0: Final[float] = time()
+    output: Union[TextIOWrapper, None] = None
+
+
+def log(msg: str):
+    if Logger.output is not None:
+        print(f"[{round((time() - Logger.T0) * 1000)}ms] {msg}", file=Logger.output)
 
 
 # Docker image fields from 'docker images --format {{json .}}'
@@ -573,6 +587,7 @@ class ContainerView:
 def get_key_press(stdscr: curses.window) -> int:
     while True:
         key = stdscr.getch()
+        log(f"{key=}")
 
         if key != curses.ascii.ESC:
             return key
@@ -580,10 +595,13 @@ def get_key_press(stdscr: curses.window) -> int:
         # Check if there are more characters available (Alt+key combinations)
         stdscr.nodelay(True)
         next_key = stdscr.getch()
+        log(f"{next_key=}")
         stdscr.nodelay(False)
 
         if next_key in (curses.ascii.ESC, curses.ERR):
             return key
+        else:
+            log('key ignored')
 
 
 def main_curses(stdscr: curses.window, config: Config):
@@ -620,10 +638,18 @@ def main_curses(stdscr: curses.window, config: Config):
             break
 
 
-def main():
-    config = Config()
-    curses.wrapper(lambda w: main_curses(w, config))
-
-
 if __name__ == "__main__":
+    def main():
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--log', type=str, help='Path to the log file')
+
+        args = parser.parse_args()
+
+        if args.log:
+            # pylint: disable=consider-using-with
+            Logger.output = open(args.log, "w", encoding='utf-8')
+            log('Starting')
+
+        curses.wrapper(lambda w: main_curses(w, Config()))
+
     main()
