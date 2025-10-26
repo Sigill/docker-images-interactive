@@ -3,6 +3,7 @@ import curses
 import curses.ascii
 import json
 import subprocess
+import sys
 from typing import Any, Callable, Iterable, List, Set, Tuple, TypedDict, Union
 
 
@@ -159,10 +160,11 @@ def pretty_id_or_name(value: str, sz: Union[int, None]) -> str:
 
 
 class Filter:
-    editing = False
-    live_keyword = ""
-    saved_keyword = ""
-    cursor_pos = 0
+    def __init__(self) -> None:
+        self.editing = False
+        self.live_keyword = ""
+        self.saved_keyword = ""
+        self.cursor_pos = 0
 
     def get_effective_keyword(self):
         return self.live_keyword if self.editing else self.saved_keyword
@@ -568,8 +570,30 @@ class ContainerView:
         return True
 
 
+def get_key_press(stdscr: curses.window) -> int:
+    while True:
+        key = stdscr.getch()
+
+        if key != curses.ascii.ESC:
+            return key
+
+        # Check if there are more characters available (Alt+key combinations)
+        stdscr.nodelay(True)
+        next_key = stdscr.getch()
+        stdscr.nodelay(False)
+
+        if next_key in (curses.ascii.ESC, curses.ERR):
+            return key
+
+
 def main_curses(stdscr: curses.window, config: Config):
     curses.curs_set(0)
+
+    if sys.version_info >= (3, 9):
+        # Alt+key combinations are sent as escape sequences.
+        # A default 1s delay ESC is applied before reporting an ESC key press to help identifying escape sequences.
+        # As this script doesn't use escape sequences, reduce this delay for faster ESC key press interpretation.
+        curses.set_escdelay(1)
 
     if curses.has_colors():
         curses.start_color()
@@ -584,7 +608,7 @@ def main_curses(stdscr: curses.window, config: Config):
         view.display(max_y)
         stdscr.refresh()
 
-        k = stdscr.getch()
+        k = get_key_press(stdscr)
         # Clear the screen. This is especially important when resizing the terminal, which send a curses.KEY_RESIZE.
         stdscr.erase()
 
