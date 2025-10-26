@@ -3,7 +3,7 @@ import curses
 import curses.ascii
 import json
 import subprocess
-from typing import Any, Callable, Iterable, List, Set, Tuple, TypedDict
+from typing import Any, Callable, Iterable, List, Set, Tuple, TypedDict, Union
 
 
 # pylint: disable=too-few-public-methods
@@ -128,8 +128,8 @@ def display_editable_text(stdscr: curses.window, text: str, cursor_position: int
 
 
 def compute_columns_width(
-    headers_width: list[int],
-    columns_width: Iterable[List[int | str]]
+    headers_width: List[int],
+    columns_width: Iterable[List[Union[int, str]]]
 ) -> List[int]:
     max_width = headers_width.copy()
 
@@ -151,7 +151,7 @@ def remove_prefix(value: str, prefix: str) -> str:
     return value[len(prefix):] if value.startswith(prefix) else value
 
 
-def pretty_id_or_name(value: str, sz: int | None) -> str:
+def pretty_id_or_name(value: str, sz: Union[int, None]) -> str:
     prefix = 'sha256:'
     if value.startswith(prefix):
         return value[len(prefix):][:sz]
