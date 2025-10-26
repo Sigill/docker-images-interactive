@@ -4,7 +4,7 @@ import curses.ascii
 import json
 import subprocess
 import sys
-from typing import Any, Callable, Iterable, List, Set, Tuple, TypedDict, Union
+from typing import Any, Callable, Final, Iterable, List, Sequence, Set, Tuple, TypedDict, Union
 
 
 # pylint: disable=too-few-public-methods
@@ -130,15 +130,13 @@ def display_editable_text(stdscr: curses.window, text: str, cursor_position: int
 
 def compute_columns_width(
     headers_width: List[int],
-    columns_width: Iterable[List[Union[int, str]]]
+    columns_width: Iterable[List[str]]
 ) -> List[int]:
     max_width = headers_width.copy()
 
     for column_width in columns_width:
         for i, value in enumerate(column_width):
-            sz = len(value) if isinstance(value, str) else value
-            if sz > max_width[i]:
-                max_width[i] = sz
+            max_width[i] = max(max_width[i], len(value))
 
     return max_width
 
@@ -301,11 +299,13 @@ class ListController:
 
 
 class ImageView:
+    HEADERS: Final[List[str]] = [' ', 'IMAGE ID', 'REPOSITORY', 'TAG', 'SIZE', 'CREATED', 'USED']
+
     def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
         self.config = config
 
-        self.image_container_pairs = get_images_with_containers()
+        self._refresh()
 
         self.list_controller = ListController(
             get_list_length=lambda: len(self.image_container_pairs),
@@ -340,6 +340,17 @@ class ImageView:
         self._refresh()
         self.list_controller.current = min(self.list_controller.current, len(self.image_container_pairs)-1)
 
+    def _columns(self, idx: int, img: ImageInfo, containers: Sequence[ContainerInfo]):
+        return [
+            '>' if idx in self.list_controller.selected_items else ' ',
+            remove_prefix(value=img['ID'], prefix='sha256:')[:12],
+            img['Repository'],
+            img['Tag'],
+            img['Size'],
+            img['CreatedSince'],
+            '*' if len(containers) > 0 else ' '
+        ]
+
     def display(self, max_y: int) -> None:
         if not self.image_container_pairs:
             self.stdscr.addstr(1, 0, "No image found.")
@@ -349,21 +360,12 @@ class ImageView:
 
         display_pairs = filter_images(self.image_container_pairs, self.filter.get_effective_keyword())
 
-        headers = [' ', 'IMAGE ID', 'REPOSITORY', 'TAG', 'SIZE', 'CREATED', 'USED']
         columns_width = compute_columns_width(
-            [len(h) for h in headers],
-            ([
-                1,
-                remove_prefix(value=img['ID'], prefix='sha256:')[:12],
-                img['Repository'],
-                img['Tag'],
-                img['Size'],
-                img['CreatedSince'],
-                1
-            ] for (img, _) in display_pairs)
+            [len(h) for h in self.HEADERS],
+            (self._columns(i, img, containers) for i, (img, containers) in enumerate(display_pairs))
         )
 
-        self.stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
+        self.stdscr.addstr(0, 0, format_columns(zip(self.HEADERS, columns_width)))
 
         # Display only the visible range of images
         for line_idx, (idx, (img, containers)) in enumerate(
@@ -372,18 +374,7 @@ class ImageView:
                 start=self.list_controller.scroll_offset
             )
         ):
-            line = format_columns(zip(
-                [
-                    '>' if idx in self.list_controller.selected_items else ' ',
-                    remove_prefix(value=img['ID'], prefix='sha256:')[:12],
-                    img['Repository'],
-                    img['Tag'],
-                    img['Size'],
-                    img['CreatedSince'],
-                    '*' if len(containers) > 0 else ' '
-                ],
-                columns_width
-            ))
+            line = format_columns(zip(self._columns(idx, img, containers), columns_width))
             if idx == self.list_controller.current:
                 self.stdscr.addstr(1+line_idx, 0, line, curses.A_REVERSE)
             else:
@@ -437,11 +428,13 @@ class ImageView:
 
 
 class ContainerView:
+    HEADERS: Final[List[str]] = [' ', 'CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'NAMES']
+
     def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
         self.config = config
 
-        self.containers = list_docker_containers()
+        self._refresh()
 
         self.list_controller = ListController(
             get_list_length=lambda: len(self.containers),
@@ -476,6 +469,17 @@ class ContainerView:
         self._refresh()
         self.list_controller.current = min(self.list_controller.current, len(self.containers)-1)
 
+    def _columns(self, idx: int, container: ContainerInfo):
+        return [
+            '>' if idx in self.list_controller.selected_items else ' ',
+            container['ID'][:12],
+            pretty_id_or_name(container['Image'], 12),
+            container['Command'],
+            container['RunningFor'],
+            container['Status'],
+            container['Names'],
+        ]
+
     def display(self, max_y: int) -> None:
         if not self.containers:
             self.stdscr.addstr(1, 0, "No container found.")
@@ -485,21 +489,12 @@ class ContainerView:
 
         display_containers = filter_containers(self.containers, self.filter.get_effective_keyword())
 
-        headers = [' ', 'CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'NAMES']
         columns_width = compute_columns_width(
-            [len(h) for h in headers],
-            ([
-                1,
-                cont['ID'][:12],
-                pretty_id_or_name(cont['Image'], 12),
-                cont['Command'],
-                cont['RunningFor'],
-                cont['Status'],
-                cont['Names']
-            ] for cont in display_containers)
+            [len(h) for h in self.HEADERS],
+            (self._columns(i, container) for i, container in enumerate(display_containers))
         )
 
-        self.stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
+        self.stdscr.addstr(0, 0, format_columns(zip(self.HEADERS, columns_width)))
 
         for line_idx, (idx, container) in enumerate(
             enumerate(
@@ -507,18 +502,7 @@ class ContainerView:
                 start=self.list_controller.scroll_offset
             )
         ):
-            line = format_columns(zip(
-                [
-                    '>' if line_idx in self.list_controller.selected_items else ' ',
-                    container['ID'][:12],
-                    pretty_id_or_name(container['Image'], 12),
-                    container['Command'],
-                    container['RunningFor'],
-                    container['Status'],
-                    container['Names'],
-                ],
-                columns_width
-            ))
+            line = format_columns(zip(self._columns(idx, container), columns_width))
             if idx == self.list_controller.current:
                 self.stdscr.addstr(1+line_idx, 0, line, curses.A_REVERSE)
             else:
