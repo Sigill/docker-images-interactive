@@ -215,24 +215,15 @@ class Filter:
 
 # pylint: disable=too-many-instance-attributes
 class ListView:
-    def __init__(
-        self,
-        items: List[int],
-        on_refresh: Callable[[], None],
-        on_delete: Callable[[], None],
-        on_filter_change: Callable[[], None],
-    ) -> None:
-        self.filter = Filter(on_change=on_filter_change)
+    def __init__(self, filter: Filter) -> None:
+        self.filter = filter
 
         self.__current: int = 0
-        self.items: List[int] = items
+        self.items: List[int] = []
         self.selected_items: Set[int] = set()
 
         self.max_display_lines = 0
         self.scroll_offset = 0
-
-        self.on_refresh = on_refresh
-        self.on_delete = on_delete
 
     def set_items(self, items: List[int]):
         self.items = items
@@ -313,7 +304,7 @@ class ListView:
             stdscr.addstr(max_y-1, 0, f"{base_shortcuts}, {additional_shortcuts}")
 
     # pylint: disable=too-many-branches,too-many-return-statements
-    def handle_input(self, k: int):
+    def handle_input(self, k: int, on_refresh: Callable[[], None], on_delete: Callable[[], None],):
         """
         Return:
          - None if the event was not handled by this function.
@@ -349,7 +340,7 @@ class ListView:
             self.__current = len(self.items) - 1
             return True
         elif k == ord('d'):
-            self.on_delete()
+            on_delete()
             return True
         elif k == ord('q') or k == curses.ascii.ESC:
             return False
@@ -357,7 +348,7 @@ class ListView:
             self.selected_items.clear()
             self.__current = 0
 
-            self.on_refresh()
+            on_refresh()
             return True
         elif k == ord('/'):
             self.filter.enable_edit()
@@ -382,12 +373,7 @@ class ImageView:
 
         self.__refresh()
 
-        self.list_view = ListView(
-            items=[],
-            on_refresh=self.__refresh,
-            on_delete=self.__on_delete,
-            on_filter_change=self.__apply_filter
-        )
+        self.list_view = ListView(Filter(on_change=self.__apply_filter))
 
         self.__apply_filter()
 
@@ -463,7 +449,7 @@ class ImageView:
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
-            status = self.list_view.handle_input(k)
+            status = self.list_view.handle_input(k, self.__refresh, self.__on_delete)
             return status if status is not None else True
 
         return True
@@ -478,12 +464,7 @@ class ContainerView:
 
         self.__refresh()
 
-        self.list_view = ListView(
-            items=[],
-            on_refresh=self.__refresh,
-            on_delete=self.__on_delete,
-            on_filter_change=self.__apply_filter,
-        )
+        self.list_view = ListView(Filter(on_change=self.__apply_filter))
 
         self.__apply_filter()
 
@@ -559,7 +540,7 @@ class ContainerView:
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
-            status = self.list_view.handle_input(k)
+            status = self.list_view.handle_input(k, self.__refresh, self.__on_delete)
             return status if status is not None else True
 
         return True
