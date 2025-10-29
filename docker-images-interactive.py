@@ -121,11 +121,9 @@ def filter_containers(
 def display_editable_text(stdscr: curses.window, text: str, cursor_position: int, y: int, x: int):
     # Display the search keyword with cursor highlighting
     for i, char in enumerate(text):
-        if i == cursor_position:
-            # Highlight the character at cursor position
-            stdscr.addch(y, x + i, char, curses.A_REVERSE)
-        else:
-            stdscr.addch(y, x + i, char)
+        # Highlight the character at cursor position
+        style = curses.A_REVERSE if i == cursor_position else curses.A_NORMAL
+        stdscr.addch(y, x + i, char, style)
 
     # If cursor is at the end, we need to add a reverse space to indicate cursor position
     if cursor_position == len(text):
@@ -216,7 +214,7 @@ class Filter:
 
 
 # pylint: disable=too-many-instance-attributes
-class ListController:
+class ListView:
     def __init__(
         self,
         items: List[int],
@@ -255,7 +253,7 @@ class ListController:
     def get_current_item(self) -> int:
         return self.items[self.__current]
 
-    def adjust_offset(self, max_display_lines: int):
+    def __adjust_offset(self, max_display_lines: int):
         self.max_display_lines = max_display_lines
 
         # Calculate scroll offset to keep selected item visible
@@ -266,6 +264,53 @@ class ListController:
 
         # Ensure scroll offset is not negative
         self.scroll_offset = max(0, self.scroll_offset)
+
+    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    def display(
+        self,
+        stdscr: curses.window,
+        headers: List[str],
+        data: List[Tuple[int, List[str]]],
+        confirm_delete_mode: bool,
+        empty_msg: str,
+        delete_msg: Callable[[List[int]], str],
+        additional_shortcuts: str
+    ) -> None:
+        max_y, _ = stdscr.getmaxyx()
+        self.__adjust_offset(max_display_lines=max_y-2)  # Reserve 2 lines for header and instructions
+
+        if not data:
+            stdscr.addstr(0, 0, empty_msg)
+        else:
+            columns_width = compute_columns_width([len(h) for h in headers], (columns for (_, columns) in data))
+
+            stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
+
+            # Display only the visible range of images
+            for line_idx, (idx, columns) in enumerate(
+                data[self.scroll_offset:][:self.max_display_lines]
+            ):
+                line = format_columns(zip(columns, columns_width))
+                style = curses.A_REVERSE if idx == self.get_current_item() else curses.A_NORMAL
+                stdscr.addstr(1+line_idx, 0, line, style)
+
+        if self.filter.editing:
+            stdscr.addstr(max_y-1, 0, "Search: ")
+            display_editable_text(
+                stdscr,
+                self.filter.live_keyword,
+                self.filter.cursor_pos,
+                max_y-1,
+                8  # Position after "Search: "
+            )
+        elif confirm_delete_mode:
+            stdscr.addstr(
+                max_y-1, 0,
+                f"{delete_msg(self.get_selection())} (y/n) [Y to skip confirmation]"
+            )
+        else:
+            base_shortcuts = "q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search"
+            stdscr.addstr(max_y-1, 0, f"{base_shortcuts}, {additional_shortcuts}")
 
     # pylint: disable=too-many-branches,too-many-return-statements
     def handle_input(self, k: int):
@@ -337,7 +382,7 @@ class ImageView:
 
         self.__refresh()
 
-        self.list_controller = ListController(
+        self.list_view = ListView(
             items=[],
             on_refresh=self.__refresh,
             on_delete=self.__on_delete,
@@ -352,10 +397,10 @@ class ImageView:
         self.images = get_images_with_containers()
 
     def __apply_filter(self):
-        self.list_controller.set_items(
+        self.list_view.set_items(
             filter_images(
                 self.images,
-                self.list_controller.filter.get_effective_keyword()
+                self.list_view.filter.get_effective_keyword()
             )
         )
 
@@ -366,15 +411,15 @@ class ImageView:
             self.__delete_selected_images()
 
     def __delete_selected_images(self) -> None:
-        for idx in sorted(self.list_controller.get_selection(), reverse=True):
+        for idx in sorted(self.list_view.get_selection(), reverse=True):
             img, _ = self.images[idx]
             delete_image(img)
             del self.images[idx]
-            self.list_controller.remove_item(idx)
+            self.list_view.remove_item(idx)
 
     def __columns(self, idx: int, img: ImageInfo, containers: Sequence[ContainerInfo]):
         return [
-            '>' if idx in self.list_controller.selected_items else ' ',
+            '>' if idx in self.list_view.selected_items else ' ',
             remove_prefix(value=img['ID'], prefix='sha256:')[:12],
             img['Repository'],
             img['Tag'],
@@ -383,62 +428,31 @@ class ImageView:
             '*' if len(containers) > 0 else ' '
         ]
 
-    def display(self, max_y: int) -> None:
-        if not self.images:
-            self.stdscr.addstr(1, 0, "No image found.")
-            return
-
-        self.list_controller.adjust_offset(max_display_lines=max_y - 2)  # Reserve 2 lines for header and instructions
-
+    def display(self) -> None:
         data = [
             (i, self.__columns(i, self.images[i][0], self.images[i][1]))
-            for i in self.list_controller.items
+            for i in self.list_view.items
         ]
 
-        columns_width = compute_columns_width([len(h) for h in self.HEADERS], (columns for (_, columns) in data))
-
-        self.stdscr.addstr(0, 0, format_columns(zip(self.HEADERS, columns_width)))
-
-        # Display only the visible range of images
-        for line_idx, (idx, columns) in enumerate(
-            data[self.list_controller.scroll_offset:][:self.list_controller.max_display_lines]
-        ):
-            line = format_columns(zip(columns, columns_width))
-            if idx == self.list_controller.get_current_item():
-                self.stdscr.addstr(1+line_idx, 0, line, curses.A_REVERSE)
+        def delete_msg(sel: List[int]):
+            if len(sel) == 1:
+                image, _ = self.images[sel[0]]
+                return f"Delete image {image['Repository']}:{image['Tag']}?"
             else:
-                self.stdscr.addstr(1+line_idx, 0, line)
+                return f"Delete {len(self.list_view.selected_items)} images?"
 
-        if self.list_controller.filter.editing:
-            self.stdscr.addstr(max_y-1, 0, "Search: ")
-            display_editable_text(
-                self.stdscr,
-                self.list_controller.filter.live_keyword,
-                self.list_controller.filter.cursor_pos,
-                max_y-1,
-                8  # Position after "Search: "
-            )
-        elif self.confirm_delete_mode:
-            if len(self.list_controller.selected_items) > 0:
-                self.stdscr.addstr(
-                    max_y-1, 0,
-                    f"Delete {len(self.list_controller.selected_items)} images? (y/n) [Y to skip confirmation]"
-                )
-            else:
-                image = self.images[self.list_controller.get_current_item()][0]
-                self.stdscr.addstr(
-                    max_y-1, 0,
-                    f"Delete image {image['Repository']}:{image['Tag']}? (y/n) [Y to skip confirmation]"
-                )
-        else:
-            self.stdscr.addstr(
-                max_y-1, 0,
-                "(q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search, v: container list view)"
-            )
+        self.list_view.display(
+            self.stdscr,
+            self.HEADERS, data,
+            self.confirm_delete_mode,
+            "No image found.",
+            delete_msg,
+            "v: containers view"
+        )
 
     def handle_input(self, k: int) -> bool:
-        if self.list_controller.filter.editing:
-            self.list_controller.filter.handle_input(k)
+        if self.list_view.filter.editing:
+            self.list_view.filter.handle_input(k)
         elif self.confirm_delete_mode:
             if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 if k == ord('Y'):
@@ -449,7 +463,7 @@ class ImageView:
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
-            status = self.list_controller.handle_input(k)
+            status = self.list_view.handle_input(k)
             return status if status is not None else True
 
         return True
@@ -464,7 +478,7 @@ class ContainerView:
 
         self.__refresh()
 
-        self.list_controller = ListController(
+        self.list_view = ListView(
             items=[],
             on_refresh=self.__refresh,
             on_delete=self.__on_delete,
@@ -479,10 +493,10 @@ class ContainerView:
         self.containers = list_docker_containers()
 
     def __apply_filter(self):
-        self.list_controller.set_items(
+        self.list_view.set_items(
             filter_containers(
                 self.containers,
-                self.list_controller.filter.get_effective_keyword()
+                self.list_view.filter.get_effective_keyword()
             )
         )
 
@@ -493,15 +507,15 @@ class ContainerView:
             self.__delete_selected_containers()
 
     def __delete_selected_containers(self) -> None:
-        for idx in sorted(self.list_controller.get_selection(), reverse=True):
+        for idx in sorted(self.list_view.get_selection(), reverse=True):
             container = self.containers[idx]
             delete_container(container)
             del self.containers[idx]
-            self.list_controller.remove_item(idx)
+            self.list_view.remove_item(idx)
 
     def __columns(self, idx: int, container: ContainerInfo):
         return [
-            '>' if idx in self.list_controller.selected_items else ' ',
+            '>' if idx in self.list_view.selected_items else ' ',
             container['ID'][:12],
             pretty_id_or_name(container['Image'], 12),
             container['Command'],
@@ -510,60 +524,31 @@ class ContainerView:
             container['Names'],
         ]
 
-    def display(self, max_y: int) -> None:
-        if not self.containers:
-            self.stdscr.addstr(1, 0, "No container found.")
-            return
-
-        self.list_controller.adjust_offset(max_display_lines=max_y - 2)  # Reserve 2 lines for header and instructions
-
+    def display(self) -> None:
         data = [
             (i, self.__columns(i, self.containers[i]))
-            for i in self.list_controller.items
+            for i in self.list_view.items
         ]
 
-        columns_width = compute_columns_width([len(h) for h in self.HEADERS], (columns for (_, columns) in data))
-
-        self.stdscr.addstr(0, 0, format_columns(zip(self.HEADERS, columns_width)))
-
-        for line_idx, (idx, container) in enumerate(
-            data[self.list_controller.scroll_offset:][:self.list_controller.max_display_lines]
-        ):
-            line = format_columns(zip(container, columns_width))
-            if idx == self.list_controller.get_current_item():
-                self.stdscr.addstr(1+line_idx, 0, line, curses.A_REVERSE)
+        def delete_msg(sel: List[int]):
+            if len(sel) == 1:
+                container = self.containers[sel[0]]
+                return f"Delete container {container['ID'][:8]} - {container['Names']}?"
             else:
-                self.stdscr.addstr(1+line_idx, 0, line)
+                return f"Delete {len(self.list_view.selected_items)} containers?"
 
-        if self.list_controller.filter.editing:
-            self.stdscr.addstr(max_y-1, 0, "Search: ")
-            display_editable_text(
-                self.stdscr,
-                self.list_controller.filter.live_keyword,
-                self.list_controller.filter.cursor_pos,
-                max_y-1,
-                8  # Position after "Search: "
-            )
-        elif self.confirm_delete_mode:
-            if len(self.list_controller.selected_items) > 0:
-                self.stdscr.addstr(
-                    max_y-1,
-                    0,
-                    f"Delete {len(self.list_controller.selected_items)} containers? (y/n) [Y to skip confirmation]"
-                )
-            else:
-                container = self.containers[self.list_controller.get_current_item()]
-                self.stdscr.addstr(
-                    max_y-1,
-                    0,
-                    f"Delete container {container['ID'][:8]} - {container['Names']}? (y/n) [Y to skip confirmation]"
-                )
-        else:
-            self.stdscr.addstr(max_y-1, 0, "(q: quit, d: delete, r/F5: refresh, g: first, G: last, v: image list view)")
+        self.list_view.display(
+            self.stdscr,
+            self.HEADERS, data,
+            self.confirm_delete_mode,
+            "No container found.",
+            delete_msg,
+            "v: images view"
+        )
 
     def handle_input(self, k: int) -> bool:
-        if self.list_controller.filter.editing:
-            self.list_controller.filter.handle_input(k)
+        if self.list_view.filter.editing:
+            self.list_view.filter.handle_input(k)
         elif self.confirm_delete_mode:
             if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 if k == ord('Y'):
@@ -574,7 +559,7 @@ class ContainerView:
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
-            status = self.list_controller.handle_input(k)
+            status = self.list_view.handle_input(k)
             return status if status is not None else True
 
         return True
@@ -614,8 +599,7 @@ def main_curses(stdscr: curses.window, config: Config):
     view: ImageView | ContainerView = ImageView(stdscr, config)
 
     while True:
-        max_y, _ = stdscr.getmaxyx()
-        view.display(max_y)
+        view.display()
         stdscr.refresh()
 
         k = get_key_press(stdscr)
