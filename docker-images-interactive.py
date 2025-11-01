@@ -353,10 +353,10 @@ class ListView:
         elif k == curses.KEY_PPAGE:  # Page Up
             self.__scroll.prev_page()
             return True
-        elif k == ord('g'):  # Select first container
+        elif k in (ord('g'), curses.KEY_HOME):  # Select first container
             self.__scroll.first()
             return True
-        elif k == ord('G'):  # Select last container
+        elif k in (ord('G'), curses.KEY_END):  # Select last container
             self.__scroll.last(len(self.items))
             return True
         elif k == ord('d'):
