@@ -159,6 +159,51 @@ def pretty_id_or_name(value: str, sz: Union[int, None]) -> str:
     return value
 
 
+class ScrollController:
+    def __init__(self) -> None:
+        self.offset: int = 0
+        self.current: int = 0
+        self.available_size: int = 0
+
+    def adjust_offset(self, available_size: int):
+        self.available_size = available_size
+
+        # Calculate scroll offset to keep selected item visible
+        if self.current < self.offset:
+            self.offset = self.current
+        elif self.current >= self.offset + available_size:
+            self.offset = self.current - available_size + 1
+
+        # Ensure scroll offset is not negative
+        self.offset = max(0, self.offset)
+
+    def prev(self):
+        self.current = max(0, self.current-1)
+
+    def next(self, collection_size: int):
+        self.current = min(self.current+1, collection_size-1)
+
+    def first(self):
+        self.current = 0
+
+    def last(self, collection_size: int):
+        self.current = collection_size - 1
+
+    def prev_page(self):
+        first_visible = self.offset
+        if self.current != first_visible:
+            self.current = first_visible
+        else:
+            self.current = max(self.current - self.available_size, 0)
+
+    def next_page(self, collection_size: int):
+        last_visible = min(self.offset + self.available_size - 1, collection_size - 1)
+        if self.current != last_visible:
+            self.current = last_visible
+        else:
+            self.current = min(self.current + self.available_size, collection_size - 1)
+
+
 class Filter:
     def __init__(self, on_change: Callable[[], None]) -> None:
         self.on_change = on_change
@@ -213,27 +258,24 @@ class Filter:
             self.on_change()
 
 
-# pylint: disable=too-many-instance-attributes
 class ListView:
     def __init__(self, filter: Filter) -> None:
         self.filter = filter
 
-        self.__current: int = 0
         self.items: List[int] = []
         self.selected_items: Set[int] = set()
 
-        self.max_display_lines = 0
-        self.scroll_offset = 0
+        self.__scroll = ScrollController()
 
     def set_items(self, items: List[int]):
         self.items = items
-        self.__current = 0  # TODO try to maintain current item selected.
+        self.__scroll.first()  # TODO try to maintain current item selected.
 
     def remove_item(self, item: int):
         self.selected_items = set(i - 1 if i > item else i for i in self.selected_items if i != item)
         self.items = [i - 1 if i > item else i for i in self.items if i != item]
         if item <= self.get_current_item():
-            self.__current -= 1
+            self.__scroll.prev()
 
     def get_selection(self) -> List[int]:
         if len(self.selected_items) > 0:
@@ -242,19 +284,7 @@ class ListView:
             return [self.get_current_item()]
 
     def get_current_item(self) -> int:
-        return self.items[self.__current]
-
-    def __adjust_offset(self, max_display_lines: int):
-        self.max_display_lines = max_display_lines
-
-        # Calculate scroll offset to keep selected item visible
-        if self.__current < self.scroll_offset:
-            self.scroll_offset = self.__current
-        elif self.__current >= self.scroll_offset + self.max_display_lines:
-            self.scroll_offset = self.__current - self.max_display_lines + 1
-
-        # Ensure scroll offset is not negative
-        self.scroll_offset = max(0, self.scroll_offset)
+        return self.items[self.__scroll.current]
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     def display(
@@ -268,7 +298,7 @@ class ListView:
         additional_shortcuts: str
     ) -> None:
         max_y, _ = stdscr.getmaxyx()
-        self.__adjust_offset(max_display_lines=max_y-2)  # Reserve 2 lines for header and instructions
+        self.__scroll.adjust_offset(available_size=max_y-2)  # Reserve 2 lines for header and instructions
 
         if not data:
             stdscr.addstr(0, 0, empty_msg)
@@ -279,7 +309,7 @@ class ListView:
 
             # Display only the visible range of images
             for line_idx, (idx, columns) in enumerate(
-                data[self.scroll_offset:][:self.max_display_lines]
+                data[self.__scroll.offset:][:self.__scroll.available_size]
             ):
                 line = format_columns(zip(columns, columns_width))
                 style = curses.A_REVERSE if idx == self.get_current_item() else curses.A_NORMAL
@@ -312,32 +342,22 @@ class ListView:
          - False if the event was handled and the app shall exit.
         """
         if k == curses.KEY_UP:
-            self.__current = max(0, self.__current-1)
+            self.__scroll.prev()
             return True
         elif k == curses.KEY_DOWN:
-            self.__current = min(self.__current+1, len(self.items)-1)
+            self.__scroll.next(len(self.items))
             return True
         elif k == curses.KEY_NPAGE:  # Page Down
-            if len(self.items) > 0:
-                last_visible = min(self.scroll_offset + self.max_display_lines - 1, len(self.items) - 1)
-                if self.__current != last_visible:
-                    self.__current = last_visible
-                else:
-                    self.__current = min(self.__current + self.max_display_lines, len(self.items) - 1)
+            self.__scroll.next_page(len(self.items))
             return True
         elif k == curses.KEY_PPAGE:  # Page Up
-            if len(self.items) > 0:
-                first_visible = self.scroll_offset
-                if self.__current != first_visible:
-                    self.__current = first_visible
-                else:
-                    self.__current = max(self.__current - self.max_display_lines, 0)
+            self.__scroll.prev_page()
             return True
         elif k == ord('g'):  # Select first container
-            self.__current = 0
+            self.__scroll.first()
             return True
         elif k == ord('G'):  # Select last container
-            self.__current = len(self.items) - 1
+            self.__scroll.last(len(self.items))
             return True
         elif k == ord('d'):
             on_delete()
@@ -346,7 +366,7 @@ class ListView:
             return False
         elif k == ord('r') or k == curses.KEY_F5:  # Refresh
             self.selected_items.clear()
-            self.__current = 0
+            self.__scroll.first()
 
             on_refresh()
             return True
