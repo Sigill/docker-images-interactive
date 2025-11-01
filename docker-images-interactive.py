@@ -220,7 +220,8 @@ class Filter:
         self.live_keyword = self.saved_keyword  # Use the saved keyword when entering search mode
         self.scroll.current = len(self.live_keyword)  # Set cursor to end of keyword
 
-    def handle_input(self, k: int):
+    # pylint: disable=too-many-branches
+    def handle_input(self, k: int) -> Union[bool, None]:
         if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
             # Validate and save the search keyword
             self.saved_keyword = self.live_keyword
@@ -260,6 +261,10 @@ class Filter:
             self.live_keyword = self.live_keyword[:self.scroll.current] + chr(k) + self.live_keyword[self.scroll.current:]
             self.scroll.next(len(self.live_keyword)+1)
             self.on_change()
+        else:
+            return None
+
+        return True
 
 
 class ListView:
@@ -342,7 +347,12 @@ class ListView:
             stdscr.addstr(max_y-1, 0, f"{base_shortcuts}, {additional_shortcuts}")
 
     # pylint: disable=too-many-branches,too-many-return-statements
-    def handle_input(self, k: int, on_refresh: Callable[[], None], on_delete: Callable[[], None],):
+    def handle_input(
+        self,
+        k: int,
+        on_refresh: Callable[[], None],
+        on_delete: Callable[[], None],
+    ) -> Union[bool, None]:
         """
         Return:
          - None if the event was not handled by this function.
@@ -464,7 +474,7 @@ class ImageView:
             "v: containers view"
         )
 
-    def handle_input(self, k: int) -> bool:
+    def handle_input(self, k: int) -> Union[bool, None]:
         if self.list_view.filter.editing:
             self.list_view.filter.handle_input(k)
         elif self.confirm_delete_mode:
@@ -477,8 +487,7 @@ class ImageView:
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
-            status = self.list_view.handle_input(k, self.__refresh, self.__on_delete)
-            return status if status is not None else True
+            return self.list_view.handle_input(k, self.__refresh, self.__on_delete)
 
         return True
 
@@ -555,7 +564,7 @@ class ContainerView:
             "v: images view"
         )
 
-    def handle_input(self, k: int) -> bool:
+    def handle_input(self, k: int) -> Union[bool, None]:
         if self.list_view.filter.editing:
             self.list_view.filter.handle_input(k)
         elif self.confirm_delete_mode:
@@ -615,12 +624,15 @@ def main_curses(stdscr: curses.window, config: Config):
         # Clear the screen. This is especially important when resizing the terminal, which send a curses.KEY_RESIZE.
         stdscr.erase()
 
+        handled = view.handle_input(k)
+        if handled is False:
+            break
+        if handled is True:
+            continue
+
         if k == ord('v'):  # Switch view
             view = ContainerView(stdscr, config) if isinstance(view, ImageView) else ImageView(stdscr, config)
             continue
-
-        if not view.handle_input(k):
-            break
 
 
 def main():
