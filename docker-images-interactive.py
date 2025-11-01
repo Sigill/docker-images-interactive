@@ -210,7 +210,7 @@ class Filter:
         self.editing = False
         self.live_keyword = ""
         self.saved_keyword = ""
-        self.cursor_pos = 0
+        self.scroll = ScrollController()
 
     def get_effective_keyword(self):
         return self.live_keyword if self.editing else self.saved_keyword
@@ -218,43 +218,47 @@ class Filter:
     def enable_edit(self):
         self.editing = True
         self.live_keyword = self.saved_keyword  # Use the saved keyword when entering search mode
-        self.cursor_pos = len(self.live_keyword)  # Set cursor to end of keyword
+        self.scroll.current = len(self.live_keyword)  # Set cursor to end of keyword
 
     def handle_input(self, k: int):
         if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
             # Validate and save the search keyword
             self.saved_keyword = self.live_keyword
             self.editing = False
-            self.cursor_pos = 0
+            self.scroll.first()
         elif k == curses.ascii.ESC:  # ESC key
             # Cancel search mode
             self.editing = False
             self.live_keyword = ""
-            self.cursor_pos = 0
+            self.scroll.first()
             self.on_change()
         elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
             # Backspace
-            if self.cursor_pos > 0:
-                self.live_keyword = self.live_keyword[:self.cursor_pos-1] + self.live_keyword[self.cursor_pos:]
-                self.cursor_pos -= 1
+            if self.scroll.current > 0:
+                self.live_keyword = self.live_keyword[:self.scroll.current-1] + self.live_keyword[self.scroll.current:]
+                self.scroll.prev()
                 self.on_change()
         elif k == curses.KEY_LEFT:
             # Left arrow - move cursor left
-            if self.cursor_pos > 0:
-                self.cursor_pos -= 1
+            if self.scroll.current > 0:
+                self.scroll.prev()
         elif k == curses.KEY_RIGHT:
             # Right arrow - move cursor right
-            if self.cursor_pos < len(self.live_keyword):
-                self.cursor_pos += 1
+            if self.scroll.current < len(self.live_keyword):
+                self.scroll.next(len(self.live_keyword))
         elif k == curses.KEY_DC:  # Delete key
             # Delete character at cursor position
-            if self.cursor_pos < len(self.live_keyword):
-                self.live_keyword = self.live_keyword[:self.cursor_pos] + self.live_keyword[self.cursor_pos+1:]
+            if self.scroll.current < len(self.live_keyword):
+                self.live_keyword = self.live_keyword[:self.scroll.current] + self.live_keyword[self.scroll.current+1:]
                 self.on_change()
+        elif k == curses.KEY_HOME:
+            self.scroll.first()
+        elif k == curses.KEY_END:
+            self.scroll.last(len(self.live_keyword))
         elif 32 <= k <= 126:  # Printable characters
             # Add character to search keyword at cursor position
-            self.live_keyword = self.live_keyword[:self.cursor_pos] + chr(k) + self.live_keyword[self.cursor_pos:]
-            self.cursor_pos += 1
+            self.live_keyword = self.live_keyword[:self.scroll.current] + chr(k) + self.live_keyword[self.scroll.current:]
+            self.scroll.next(len(self.live_keyword)+1)
             self.on_change()
 
 
@@ -297,7 +301,7 @@ class ListView:
         delete_msg: Callable[[List[int]], str],
         additional_shortcuts: str
     ) -> None:
-        max_y, _ = stdscr.getmaxyx()
+        max_y, max_x = stdscr.getmaxyx()
         self.__scroll.adjust_offset(available_size=max_y-2)  # Reserve 2 lines for header and instructions
 
         if not data:
@@ -317,10 +321,14 @@ class ListView:
 
         if self.filter.editing:
             stdscr.addstr(max_y-1, 0, "Search: ")
+
+            self.filter.scroll.adjust_offset(max_x - 8 - 1)
+            displayed_keyword = self.filter.live_keyword[self.filter.scroll.offset:]
+            displayed_keyword = displayed_keyword[:self.filter.scroll.available_size-1]
             display_editable_text(
                 stdscr,
-                self.filter.live_keyword,
-                self.filter.cursor_pos,
+                displayed_keyword,
+                self.filter.scroll.current - self.filter.scroll.offset,
                 max_y-1,
                 8  # Position after "Search: "
             )
