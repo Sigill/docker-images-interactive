@@ -144,20 +144,107 @@ def display_editable_text(stdscr: curses.window, y: int, x: int, text: str, curs
 
 
 def compute_columns_width(
-    headers_width: List[int],
-    columns_width: Iterable[List[str]]
+    headers: List[str],
+    columns: Iterable[List[str]]
 ) -> List[int]:
-    max_width = headers_width.copy()
+    max_width = [len(header) for header in headers]
 
-    for column_width in columns_width:
+    for column_width in columns:
         for i, value in enumerate(column_width):
             max_width[i] = max(max_width[i], len(value))
 
     return max_width
 
 
+def compute_dynamic_columns_config(
+    columns_width: List[int],
+    columns_config: List[Tuple[str, Union[int, None], bool]],
+) -> List[Tuple[int, bool]]:
+    """
+    Create a new column config where the min size of non-adjustable columns has been set
+    to the actual width of the columns.
+    """
+    return [
+        (
+            max(len(header), min_width if min_width is not None else col_width),
+            hidable,
+        )
+        for ((header, min_width, hidable), col_width)
+        in zip(columns_config, columns_width)
+    ]
+
+
+# pylint: disable=too-many-locals
+def adjust_column_widths(
+    column_widths: List[int],
+    max_width: int,
+    column_configs: List[Tuple[int, bool]],
+    gap_size: int = 2,
+) -> List[int]:
+    """
+    Adjusts column widths to fit within max_width.
+    - Reduces columns to their minimum widths, distributing reductions equally.
+    - Hides columns (sets width to 0) if allowed, one at a time, restarting adjustment after each hide.
+    - Raises ValueError if not possible.
+    """
+    min_widths, can_hide = zip(*column_configs)
+    n: Final[int] = len(column_widths)
+    hidden = [False] * n
+
+    while True:
+        # Start from original widths, but set hidden columns to 0
+        current_widths = [
+            0 if hidden[i] else column_widths[i]
+            for i in range(n)
+        ]
+        visible_indices = [i for i in range(n) if not hidden[i]]
+        total_width = sum(current_widths[i] for i in visible_indices) + gap_size * (len(visible_indices) - 1)
+
+        if total_width <= max_width:
+            return current_widths
+
+        # Calculate how much needs to be reduced
+        excess = total_width - max_width
+
+        # Compute how much each visible column can be reduced
+        reducible = [current_widths[i] - min_widths[i] for i in visible_indices]
+        total_reducible = sum(reducible)
+
+        if total_reducible >= excess and total_reducible > 0:
+            # Distribute reduction equally (as much as possible)
+            reductions = [0] * n
+            remaining_excess = excess
+            indices = visible_indices.copy()
+            while remaining_excess > 0 and indices:
+                # Compute how much each column can be reduced in this round
+                per_col = max(1, remaining_excess // len(indices))
+                new_indices: List[int] = []
+                for i in indices:
+                    can_reduce = min(current_widths[i] - min_widths[i], per_col, remaining_excess)
+                    reductions[i] += can_reduce
+                    current_widths[i] -= can_reduce
+                    remaining_excess -= can_reduce
+                    if current_widths[i] > min_widths[i] and remaining_excess > 0:
+                        new_indices.append(i)
+                indices = new_indices
+            return [
+                0 if hidden[i] else current_widths[i]
+                for i in range(n)
+            ]
+        else:
+            # Not enough to reduce, try hiding a column
+            hidable_indices = [i for i in visible_indices if can_hide[i] and not hidden[i]]
+            if not hidable_indices:
+                raise ValueError("Not enough space to display all columns with their minimum widths")
+            # Hide the rightmost hidable column (could use other heuristics)
+            to_hide = hidable_indices[-1]
+            hidden[to_hide] = True
+            # Restart adjustment with this column hidden
+            continue
+
+
 def format_columns(columns: Iterable[Tuple[str, int]]) -> str:
-    return '  '.join(f"{value:{width}}" for (value, width) in columns)
+    return '  '.join(f"{rell(value, width):{width}}" for (value, width) in columns if width > 0)
 
 
 def remove_prefix(value: str, prefix: str) -> str:
@@ -341,7 +428,7 @@ class ListView:
     def display(
         self,
         stdscr: curses.window,
-        headers: List[str],
+        columns_config: List[Tuple[str, Union[int, None], bool]],
         data: List[Tuple[int, List[str]]],
         confirm_delete_mode: bool,
         empty_msg: str,
@@ -357,9 +444,21 @@ class ListView:
         if not data:
             stdscr.addnstr(0, 0, empty_msg, window_width)
         else:
-            columns_width = compute_columns_width([len(h) for h in headers], (columns for (_, columns) in data))
+            columns_width = compute_columns_width(
+                [header for (header, _, __) in columns_config],
+                (columns for (_, columns) in data)
+            )
+            columns_width = adjust_column_widths(
+                columns_width,
+                window_width,
+                compute_dynamic_columns_config(columns_width, columns_config),
+            )
 
-            stdscr.addnstr(0, 0, format_columns(zip(headers, columns_width)), window_width)
+            stdscr.addnstr(
+                0, 0,
+                format_columns(zip([header for (header, _, __) in columns_config], columns_width)),
+                window_width,
+            )
 
             # Display only the visible range of images
             for line_idx, (idx, columns) in enumerate(
@@ -434,7 +533,15 @@ class ListView:
 
 
 class ImageView:
-    HEADERS: Final[List[str]] = [' ', 'IMAGE ID', 'REPOSITORY', 'TAG', 'SIZE', 'CREATED', 'USED']
+    COLUMNS_CONFIG: Final[List[Tuple[str, Union[int, None], bool]]] = [
+        (' ', 1, False),
+        ('IMAGE ID', 12, False),
+        ('REPOSITORY', 32, False),
+        ('TAG', 16, False),
+        ('SIZE', None, True),
+        ('CREATED', None, True),
+        ('USED', None, False),
+    ]
 
     def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
@@ -495,7 +602,8 @@ class ImageView:
 
         self.list_view.display(
             self.stdscr,
-            self.HEADERS, data,
+            self.COLUMNS_CONFIG,
+            data,
             self.confirm_delete_mode,
             "No image found.",
             delete_msg,
@@ -522,7 +630,15 @@ class ImageView:
 
 
 class ContainerView:
-    HEADERS: Final[List[str]] = [' ', 'CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'NAMES']
+    COLUMNS_CONFIG: Final[List[Tuple[str, Union[int, None], bool]]] = [
+        (' ', 1, False),
+        ('CONTAINER ID', 12, False),
+        ('IMAGE', 32, False),
+        ('COMMAND', 20, True),
+        ('CREATED', None, True),
+        ('STATUS', None, True),
+        ('NAMES', 16, True),
+    ]
 
     def __init__(self, stdscr: curses.window, config: Config):
         self.stdscr = stdscr
@@ -583,7 +699,7 @@ class ContainerView:
 
         self.list_view.display(
             self.stdscr,
-            self.HEADERS, data,
+            self.COLUMNS_CONFIG, data,
             self.confirm_delete_mode,
             "No container found.",
             delete_msg,
