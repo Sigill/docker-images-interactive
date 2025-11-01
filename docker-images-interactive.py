@@ -210,6 +210,9 @@ class Filter:
         self.editing = False
         self.live_keyword = ""
         self.saved_keyword = ""
+        # This ScrollController is used to handle the edition of the search keyword.
+        # When appending a character to the keyword, the cursor is displayed after the end of the keyword.
+        # len(live_keyword) + 1 must therefore be used to specify the length of the keyword being edited.
         self.scroll = ScrollController()
 
     def get_effective_keyword(self):
@@ -220,8 +223,7 @@ class Filter:
         self.live_keyword = self.saved_keyword  # Use the saved keyword when entering search mode
         self.scroll.current = len(self.live_keyword)  # Set cursor to end of keyword
 
-    # pylint: disable=too-many-branches
-    def handle_input(self, k: int) -> Union[bool, None]:
+    def handle_input(self, k: int) -> None:
         if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
             # Validate and save the search keyword
             self.saved_keyword = self.live_keyword
@@ -240,13 +242,9 @@ class Filter:
                 self.scroll.prev()
                 self.on_change()
         elif k == curses.KEY_LEFT:
-            # Left arrow - move cursor left
-            if self.scroll.current > 0:
-                self.scroll.prev()
+            self.scroll.prev()
         elif k == curses.KEY_RIGHT:
-            # Right arrow - move cursor right
-            if self.scroll.current < len(self.live_keyword):
-                self.scroll.next(len(self.live_keyword))
+            self.scroll.next(len(self.live_keyword) + 1)
         elif k == curses.KEY_DC:  # Delete key
             # Delete character at cursor position
             if self.scroll.current < len(self.live_keyword):
@@ -255,16 +253,12 @@ class Filter:
         elif k == curses.KEY_HOME:
             self.scroll.first()
         elif k == curses.KEY_END:
-            self.scroll.last(len(self.live_keyword))
+            self.scroll.last(len(self.live_keyword) + 1)
         elif 32 <= k <= 126:  # Printable characters
             # Add character to search keyword at cursor position
             self.live_keyword = self.live_keyword[:self.scroll.current] + chr(k) + self.live_keyword[self.scroll.current:]
             self.scroll.next(len(self.live_keyword)+1)
             self.on_change()
-        else:
-            return None
-
-        return True
 
 
 class ListView:
@@ -346,60 +340,47 @@ class ListView:
             base_shortcuts = "q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search"
             stdscr.addstr(max_y-1, 0, f"{base_shortcuts}, {additional_shortcuts}")
 
-    # pylint: disable=too-many-branches,too-many-return-statements
+    # pylint: disable=too-many-branches
     def handle_input(
         self,
         k: int,
         on_refresh: Callable[[], None],
         on_delete: Callable[[], None],
-    ) -> Union[bool, None]:
+    ) -> bool:
         """
-        Return:
-         - None if the event was not handled by this function.
-         - True if the event was handled and the event loop shall continue.
-         - False if the event was handled and the app shall exit.
+        Return True if the input event was handled, False otherwise.
         """
         if k == curses.KEY_UP:
             self.__scroll.prev()
-            return True
         elif k == curses.KEY_DOWN:
             self.__scroll.next(len(self.items))
-            return True
-        elif k == curses.KEY_NPAGE:  # Page Down
+        elif k == curses.KEY_NPAGE:
             self.__scroll.next_page(len(self.items))
-            return True
-        elif k == curses.KEY_PPAGE:  # Page Up
+        elif k == curses.KEY_PPAGE:
             self.__scroll.prev_page()
-            return True
-        elif k in (ord('g'), curses.KEY_HOME):  # Select first container
+        elif k in [ord('g'), curses.KEY_HOME]:
             self.__scroll.first()
-            return True
-        elif k in (ord('G'), curses.KEY_END):  # Select last container
+        elif k in [ord('G'), curses.KEY_END]:
             self.__scroll.last(len(self.items))
-            return True
         elif k == ord('d'):
             on_delete()
-            return True
-        elif k == ord('q') or k == curses.ascii.ESC:
-            return False
-        elif k == ord('r') or k == curses.KEY_F5:  # Refresh
+        elif k == ord('r') or k == curses.KEY_F5:
             self.selected_items.clear()
             self.__scroll.first()
 
             on_refresh()
-            return True
         elif k == ord('/'):
             self.filter.enable_edit()
-            return True
-        elif k == ord(' '):  # Space key
+        elif k == ord(' '):
             current_item = self.get_current_item()
             if current_item in self.selected_items:
                 self.selected_items.remove(current_item)
             else:
                 self.selected_items.add(current_item)
-            return True
+        else:
+            return False
 
-        return None
+        return True
 
 
 class ImageView:
@@ -474,7 +455,7 @@ class ImageView:
             "v: containers view"
         )
 
-    def handle_input(self, k: int) -> Union[bool, None]:
+    def handle_input(self, k: int) -> bool:
         if self.list_view.filter.editing:
             self.list_view.filter.handle_input(k)
         elif self.confirm_delete_mode:
@@ -487,7 +468,8 @@ class ImageView:
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
-            return self.list_view.handle_input(k, self.__refresh, self.__on_delete)
+            self.list_view.handle_input(k, self.__refresh, self.__on_delete)
+            return False
 
         return True
 
@@ -564,7 +546,7 @@ class ContainerView:
             "v: images view"
         )
 
-    def handle_input(self, k: int) -> Union[bool, None]:
+    def handle_input(self, k: int) -> bool:
         if self.list_view.filter.editing:
             self.list_view.filter.handle_input(k)
         elif self.confirm_delete_mode:
@@ -577,8 +559,8 @@ class ContainerView:
             elif k in [ord('n'), ord('q'), curses.ascii.ESC]:
                 self.confirm_delete_mode = False
         else:
-            status = self.list_view.handle_input(k, self.__refresh, self.__on_delete)
-            return status if status is not None else True
+            if self.list_view.handle_input(k, self.__refresh, self.__on_delete) is False:
+                return False
 
         return True
 
@@ -595,7 +577,7 @@ def get_key_press(stdscr: curses.window) -> int:
         next_key = stdscr.getch()
         stdscr.nodelay(False)
 
-        if next_key in (curses.ascii.ESC, curses.ERR):
+        if next_key in [curses.ascii.ESC, curses.ERR]:
             return key
 
 
@@ -624,15 +606,15 @@ def main_curses(stdscr: curses.window, config: Config):
         # Clear the screen. This is especially important when resizing the terminal, which send a curses.KEY_RESIZE.
         stdscr.erase()
 
-        handled = view.handle_input(k)
-        if handled is False:
-            break
-        if handled is True:
+        if view.handle_input(k) is True:
             continue
 
         if k == ord('v'):  # Switch view
             view = ContainerView(stdscr, config) if isinstance(view, ImageView) else ImageView(stdscr, config)
             continue
+
+        if k in [ord('q'), curses.ascii.ESC]:
+            return False
 
 
 def main():
