@@ -348,18 +348,18 @@ class ListView:
         delete_msg: Callable[[List[int]], str],
         additional_shortcuts: str
     ) -> None:
-        max_y, max_x = stdscr.getmaxyx()
+        window_height, window_width = stdscr.getmaxyx()
         self.__scroll.adjust_offset(
             total_items=len(data),
-            visible_size=max_y-2,  # Reserve 2 lines for header and instructions
+            visible_size=window_height-2,  # Reserve 2 lines for header and instructions
         )
 
         if not data:
-            stdscr.addstr(0, 0, empty_msg)
+            stdscr.addnstr(0, 0, empty_msg, window_width)
         else:
             columns_width = compute_columns_width([len(h) for h in headers], (columns for (_, columns) in data))
 
-            stdscr.addstr(0, 0, format_columns(zip(headers, columns_width)))
+            stdscr.addnstr(0, 0, format_columns(zip(headers, columns_width)), window_width)
 
             # Display only the visible range of images
             for line_idx, (idx, columns) in enumerate(
@@ -367,20 +367,28 @@ class ListView:
             ):
                 line = format_columns(zip(columns, columns_width))
                 style = curses.A_REVERSE if idx == self.get_current_item() else curses.A_NORMAL
-                stdscr.addstr(1+line_idx, 0, line, style)
+                stdscr.addnstr(1+line_idx, 0, line, window_width, style)
 
+        # The code below renders the bottom line.
+        # Because writing to the bottom right corner of the terminal will cause an exception to be raised.
+        # Ensure that only window_width - 1 characters are written.
         if self.filter_controller.editing:
             prefix = "Search: "
-            stdscr.addstr(max_y-1, 0, prefix)
-            self.filter_controller.display_text(stdscr, max_y - 1, len(prefix), max_x - len(prefix) - 1)
+            stdscr.addstr(window_height-1, 0, prefix)  # No need for addnstr, terminal is always wide enough.
+            self.filter_controller.display_text(
+                stdscr, window_height - 1, len(prefix),
+                window_width - len(prefix) - 1
+            )
         elif confirm_delete_mode:
-            stdscr.addstr(
-                max_y-1, 0,
-                f"{delete_msg(self.get_selection())} (y/n) [Y to skip confirmation]"
+            stdscr.addnstr(
+                window_height-1, 0,
+                f"{delete_msg(self.get_selection())} (y/n) [Y to skip confirmation]",
+                window_width - 1
             )
         else:
             base_shortcuts = "q: quit, d: delete, r/F5: refresh, g: first, G: last, /: search"
-            stdscr.addstr(max_y-1, 0, f"{base_shortcuts}, {additional_shortcuts}")
+            shortcuts = f"{base_shortcuts}, {additional_shortcuts}"
+            stdscr.addnstr(window_height-1, 0, shortcuts, window_width - 1)
 
     # pylint: disable=too-many-branches
     def handle_input(
@@ -635,6 +643,13 @@ def main_curses(stdscr: curses.window, config: Config):
     view: ImageView | ContainerView = ImageView(stdscr, config)
 
     while True:
+        h, w = stdscr.getmaxyx()
+
+        if h < 3 or w < 40:
+            stdscr.addnstr(0, 0, "Terminal too small", w)
+            stdscr.getch()
+            continue
+
         view.display()
         stdscr.refresh()
 
