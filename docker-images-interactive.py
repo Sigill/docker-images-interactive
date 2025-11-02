@@ -131,7 +131,7 @@ def splice_string(s: str, start: int, delete_count: int, replacement: str = '') 
     return s[:start] + replacement + s[start + delete_count:]
 
 
-def display_editable_text(stdscr: curses.window, text: str, cursor_position: int, y: int, x: int):
+def display_editable_text(stdscr: curses.window, y: int, x: int, text: str, cursor_position: int):
     # Display the search keyword with cursor highlighting
     for i, char in enumerate(text):
         # Highlight the character at cursor position
@@ -185,11 +185,10 @@ class ScrollController:
         self.scroll_offset: int = 0
 
     def adjust_offset(self, total_items: int, visible_size: int):
+        """
+        Keep the selected item visible and clamp the scroll offset.
+        """
         self.visible_size = visible_size
-        # Keep the selected item visible and clamp the scroll offset
-        if total_items <= 0:
-            self.scroll_offset = 0
-            return
 
         # If selected is above the window, jump to it. If it's below, move the window so
         # the selected item is the last visible line. Then clamp within valid bounds.
@@ -229,66 +228,90 @@ class ScrollController:
             self.selected_index = min(self.selected_index + self.visible_size, collection_size - 1)
 
 
-class Filter:
+class TextInputController:
     def __init__(self, on_change: Callable[[], None]) -> None:
         self.on_change = on_change
-        self.editing = False
-        self.live_keyword = ""
-        self.saved_keyword = ""
+        self.__editing: bool = False
+        self.__live_text: str = ""
+        self.__saved_text: str = ""
         # This ScrollController is used to handle the edition of the search keyword.
         # When appending a character to the keyword, the cursor is displayed after the end of the keyword.
         # len(live_keyword) + 1 must therefore be used to specify the length of the keyword being edited.
         self.scroll = ScrollController()
 
-    def get_effective_keyword(self):
-        return self.live_keyword if self.editing else self.saved_keyword
+    @property
+    def text(self):
+        return self.__live_text if self.editing else self.__saved_text
 
-    def enable_edit(self):
-        self.editing = True
-        self.live_keyword = self.saved_keyword  # Use the saved keyword when entering search mode
-        self.scroll.selected_index = len(self.live_keyword)  # Set cursor to end of keyword
+    @property
+    def editing(self) -> bool:
+        return self.__editing
+
+    @editing.setter
+    def editing(self, value: bool) -> None:
+        self.__editing = value
+        if value:
+            self.__live_text = self.__saved_text  # Use the saved keyword when entering search mode
+            self.scroll.selected_index = len(self.__live_text)  # Set cursor to end of keyword
 
     def handle_input(self, k: int) -> None:
         if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
             # Validate and save the search keyword
-            self.saved_keyword = self.live_keyword
+            self.__saved_text = self.__live_text
             self.editing = False
             self.scroll.first()
         elif k == curses.ascii.ESC:  # ESC key
             # Cancel search mode
             self.editing = False
-            self.live_keyword = ""
+            self.__live_text = ""
             self.scroll.first()
             self.on_change()
         elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
             # Backspace
             if self.scroll.selected_index > 0:
-                self.live_keyword = splice_string(self.live_keyword, self.scroll.selected_index - 1, 1)
+                self.__live_text = splice_string(self.__live_text, self.scroll.selected_index - 1, 1)
                 self.scroll.prev()
                 self.on_change()
         elif k == curses.KEY_LEFT:
             self.scroll.prev()
         elif k == curses.KEY_RIGHT:
-            self.scroll.next(len(self.live_keyword) + 1)
+            self.scroll.next(len(self.__live_text) + 1)
         elif k == curses.KEY_DC:  # Delete key
             # Delete character at cursor position
-            if self.scroll.selected_index < len(self.live_keyword):
-                self.live_keyword = splice_string(self.live_keyword, self.scroll.selected_index, 1)
+            if self.scroll.selected_index < len(self.__live_text):
+                self.__live_text = splice_string(self.__live_text, self.scroll.selected_index, 1)
                 self.on_change()
         elif k == curses.KEY_HOME:
             self.scroll.first()
         elif k == curses.KEY_END:
-            self.scroll.last(len(self.live_keyword) + 1)
+            self.scroll.last(len(self.__live_text) + 1)
         elif 32 <= k <= 126:  # Printable characters
             # Add character to search keyword at cursor position
-            self.live_keyword = splice_string(self.live_keyword, self.scroll.selected_index, 0, chr(k))
-            self.scroll.next(len(self.live_keyword)+1)
+            self.__live_text = splice_string(self.__live_text, self.scroll.selected_index, 0, chr(k))
+            self.scroll.next(len(self.__live_text)+1)
             self.on_change()
+
+    def display_text(
+        self,
+        stdscr: curses.window, y: int, x: int,
+        visible_size: int,
+    ):
+        text = self.text
+        self.scroll.adjust_offset(
+            total_items=len(text) + 1,  # Add 1 to display the cursor past the end.
+            visible_size=visible_size,
+        )
+
+        display_editable_text(
+            stdscr, y, x,
+            text[self.scroll.scroll_offset:][:self.scroll.visible_size-1],
+            self.scroll.selected_index - self.scroll.scroll_offset,
+        )
 
 
 class ListView:
-    def __init__(self, filter: Filter) -> None:
-        self.filter = filter
+    def __init__(self, filter_controller: TextInputController) -> None:
+        self.filter_controller = filter_controller
 
         self.items: List[int] = []
         self.selected_items: Set[int] = set()
@@ -346,22 +369,10 @@ class ListView:
                 style = curses.A_REVERSE if idx == self.get_current_item() else curses.A_NORMAL
                 stdscr.addstr(1+line_idx, 0, line, style)
 
-        if self.filter.editing:
-            stdscr.addstr(max_y-1, 0, "Search: ")
-
-            self.filter.scroll.adjust_offset(
-                total_items=len(self.filter.live_keyword) + 1,
-                visible_size=max_x - 8 - 1,
-            )
-            displayed_keyword = self.filter.live_keyword[self.filter.scroll.scroll_offset:]
-            displayed_keyword = displayed_keyword[:self.filter.scroll.visible_size-1]
-            display_editable_text(
-                stdscr,
-                displayed_keyword,
-                self.filter.scroll.selected_index - self.filter.scroll.scroll_offset,
-                max_y-1,
-                8  # Position after "Search: "
-            )
+        if self.filter_controller.editing:
+            prefix = "Search: "
+            stdscr.addstr(max_y-1, 0, prefix)
+            self.filter_controller.display_text(stdscr, max_y - 1, len(prefix), max_x - len(prefix) - 1)
         elif confirm_delete_mode:
             stdscr.addstr(
                 max_y-1, 0,
@@ -401,7 +412,7 @@ class ListView:
 
             on_refresh()
         elif k == ord('/'):
-            self.filter.enable_edit()
+            self.filter_controller.editing = True
         elif k == ord(' '):
             current_item = self.get_current_item()
             if current_item in self.selected_items:
@@ -423,7 +434,7 @@ class ImageView:
 
         self.__refresh()
 
-        self.list_view = ListView(Filter(on_change=self.__apply_filter))
+        self.list_view = ListView(TextInputController(on_change=self.__apply_filter))
 
         self.__apply_filter()
 
@@ -434,10 +445,7 @@ class ImageView:
 
     def __apply_filter(self):
         self.list_view.set_items(
-            filter_images(
-                self.images,
-                self.list_view.filter.get_effective_keyword()
-            )
+            filter_images(self.images, self.list_view.filter_controller.text)
         )
 
     def __on_delete(self):
@@ -487,8 +495,8 @@ class ImageView:
         )
 
     def handle_input(self, k: int) -> bool:
-        if self.list_view.filter.editing:
-            self.list_view.filter.handle_input(k)
+        if self.list_view.filter_controller.editing:
+            self.list_view.filter_controller.handle_input(k)
         elif self.confirm_delete_mode:
             if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 if k == ord('Y'):
@@ -514,7 +522,7 @@ class ContainerView:
 
         self.__refresh()
 
-        self.list_view = ListView(Filter(on_change=self.__apply_filter))
+        self.list_view = ListView(TextInputController(on_change=self.__apply_filter))
 
         self.__apply_filter()
 
@@ -525,10 +533,7 @@ class ContainerView:
 
     def __apply_filter(self):
         self.list_view.set_items(
-            filter_containers(
-                self.containers,
-                self.list_view.filter.get_effective_keyword()
-            )
+            filter_containers(self.containers, self.list_view.filter_controller.text)
         )
 
     def __on_delete(self):
@@ -578,8 +583,8 @@ class ContainerView:
         )
 
     def handle_input(self, k: int) -> bool:
-        if self.list_view.filter.editing:
-            self.list_view.filter.handle_input(k)
+        if self.list_view.filter_controller.editing:
+            self.list_view.filter_controller.handle_input(k)
         elif self.confirm_delete_mode:
             if k in [ord('y'), ord('Y'), curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
                 if k == ord('Y'):
