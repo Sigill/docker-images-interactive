@@ -118,6 +118,19 @@ def filter_containers(
     ]
 
 
+def splice_string(s: str, start: int, delete_count: int, replacement: str = '') -> str:
+    """
+    Splice a string by removing a substring and replacing it with another substring.
+
+    :param s: The original string.
+    :param start: The starting index of the substring to remove.
+    :param deleteCount: The number of elements to remove.
+    :param replacement: The substring to insert at the removed position. Defaults to an empty string.
+    :return: The modified string after splicing.
+    """
+    return s[:start] + replacement + s[start + delete_count:]
+
+
 def display_editable_text(stdscr: curses.window, text: str, cursor_position: int, y: int, x: int):
     # Display the search keyword with cursor highlighting
     for i, char in enumerate(text):
@@ -160,55 +173,61 @@ def pretty_id_or_name(value: str, sz: Union[int, None]) -> str:
 
 
 class ScrollController:
-    def __init__(self) -> None:
-        self.offset: int = 0
-        self.current: int = 0
-        self.available_size: int = 0
+    """
+    Manages the scrollable list of items in the UI.
 
-    def adjust_offset(self, collection_size: int, available_size: int):
-        self.available_size = available_size
+    This class is responsible for keeping track of the current selected item and adjusting the scroll offset
+    to ensure that the selected item remains visible within the available display area.
+    """
+    def __init__(self) -> None:
+        self.visible_size: int = 0
+        self.selected_index: int = 0
+        self.scroll_offset: int = 0
+
+    def adjust_offset(self, total_items: int, visible_size: int):
+        self.visible_size = visible_size
 
         # Calculate scroll offset to keep selected item visible
-        if self.current < self.offset:
-            self.offset = self.current
-        elif self.current >= self.offset + available_size:
-            self.offset = self.current - available_size + 1
+        if self.selected_index < self.scroll_offset:
+            self.scroll_offset = self.selected_index
+        elif self.selected_index >= self.scroll_offset + visible_size:
+            self.scroll_offset = self.selected_index - visible_size + 1
 
         # Adjust offset if there is unused space in the collection
-        visible_items = min(available_size, collection_size - self.offset)
-        unused_space = available_size - visible_items
+        visible_items = min(visible_size, total_items - self.scroll_offset)
+        unused_space = visible_size - visible_items
         if unused_space > 0:
             # Adjust offset up to use the unused space
-            self.offset = max(0, self.offset - unused_space)
+            self.scroll_offset = max(0, self.scroll_offset - unused_space)
 
         # Ensure scroll offset is not negative
-        self.offset = max(0, self.offset)
+        self.scroll_offset = max(0, self.scroll_offset)
 
     def prev(self):
-        self.current = max(0, self.current-1)
+        self.selected_index = max(0, self.selected_index-1)
 
     def next(self, collection_size: int):
-        self.current = min(self.current+1, collection_size-1)
+        self.selected_index = min(self.selected_index+1, collection_size-1)
 
     def first(self):
-        self.current = 0
+        self.selected_index = 0
 
     def last(self, collection_size: int):
-        self.current = collection_size - 1
+        self.selected_index = collection_size - 1
 
     def prev_page(self):
-        first_visible = self.offset
-        if self.current != first_visible:
-            self.current = first_visible
+        first_visible = self.scroll_offset
+        if self.selected_index != first_visible:
+            self.selected_index = first_visible
         else:
-            self.current = max(self.current - self.available_size, 0)
+            self.selected_index = max(self.selected_index - self.visible_size, 0)
 
     def next_page(self, collection_size: int):
-        last_visible = min(self.offset + self.available_size - 1, collection_size - 1)
-        if self.current != last_visible:
-            self.current = last_visible
+        last_visible = min(self.scroll_offset + self.visible_size - 1, collection_size - 1)
+        if self.selected_index != last_visible:
+            self.selected_index = last_visible
         else:
-            self.current = min(self.current + self.available_size, collection_size - 1)
+            self.selected_index = min(self.selected_index + self.visible_size, collection_size - 1)
 
 
 class Filter:
@@ -228,7 +247,7 @@ class Filter:
     def enable_edit(self):
         self.editing = True
         self.live_keyword = self.saved_keyword  # Use the saved keyword when entering search mode
-        self.scroll.current = len(self.live_keyword)  # Set cursor to end of keyword
+        self.scroll.selected_index = len(self.live_keyword)  # Set cursor to end of keyword
 
     def handle_input(self, k: int) -> None:
         if k in [curses.KEY_ENTER, curses.ascii.CR, curses.ascii.LF]:
@@ -244,8 +263,8 @@ class Filter:
             self.on_change()
         elif k in [curses.KEY_BACKSPACE, curses.ascii.DEL, curses.ascii.BS]:
             # Backspace
-            if self.scroll.current > 0:
-                self.live_keyword = self.live_keyword[:self.scroll.current-1] + self.live_keyword[self.scroll.current:]
+            if self.scroll.selected_index > 0:
+                self.live_keyword = splice_string(self.live_keyword, self.scroll.selected_index - 1, 1)
                 self.scroll.prev()
                 self.on_change()
         elif k == curses.KEY_LEFT:
@@ -254,8 +273,8 @@ class Filter:
             self.scroll.next(len(self.live_keyword) + 1)
         elif k == curses.KEY_DC:  # Delete key
             # Delete character at cursor position
-            if self.scroll.current < len(self.live_keyword):
-                self.live_keyword = self.live_keyword[:self.scroll.current] + self.live_keyword[self.scroll.current+1:]
+            if self.scroll.selected_index < len(self.live_keyword):
+                self.live_keyword = splice_string(self.live_keyword, self.scroll.selected_index, 1)
                 self.on_change()
         elif k == curses.KEY_HOME:
             self.scroll.first()
@@ -263,7 +282,7 @@ class Filter:
             self.scroll.last(len(self.live_keyword) + 1)
         elif 32 <= k <= 126:  # Printable characters
             # Add character to search keyword at cursor position
-            self.live_keyword = self.live_keyword[:self.scroll.current] + chr(k) + self.live_keyword[self.scroll.current:]
+            self.live_keyword = splice_string(self.live_keyword, self.scroll.selected_index, 0, chr(k))
             self.scroll.next(len(self.live_keyword)+1)
             self.on_change()
 
@@ -294,7 +313,7 @@ class ListView:
             return [self.get_current_item()]
 
     def get_current_item(self) -> int:
-        return self.items[self.__scroll.current]
+        return self.items[self.__scroll.selected_index]
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     def display(
@@ -309,8 +328,8 @@ class ListView:
     ) -> None:
         max_y, max_x = stdscr.getmaxyx()
         self.__scroll.adjust_offset(
-            collection_size=len(data),
-            available_size=max_y-2,  # Reserve 2 lines for header and instructions
+            total_items=len(data),
+            visible_size=max_y-2,  # Reserve 2 lines for header and instructions
         )
 
         if not data:
@@ -322,7 +341,7 @@ class ListView:
 
             # Display only the visible range of images
             for line_idx, (idx, columns) in enumerate(
-                data[self.__scroll.offset:][:self.__scroll.available_size]
+                data[self.__scroll.scroll_offset:][:self.__scroll.visible_size]
             ):
                 line = format_columns(zip(columns, columns_width))
                 style = curses.A_REVERSE if idx == self.get_current_item() else curses.A_NORMAL
@@ -332,15 +351,15 @@ class ListView:
             stdscr.addstr(max_y-1, 0, "Search: ")
 
             self.filter.scroll.adjust_offset(
-                collection_size=len(self.filter.live_keyword) + 1,
-                available_size=max_x - 8 - 1,
+                total_items=len(self.filter.live_keyword) + 1,
+                visible_size=max_x - 8 - 1,
             )
-            displayed_keyword = self.filter.live_keyword[self.filter.scroll.offset:]
-            displayed_keyword = displayed_keyword[:self.filter.scroll.available_size-1]
+            displayed_keyword = self.filter.live_keyword[self.filter.scroll.scroll_offset:]
+            displayed_keyword = displayed_keyword[:self.filter.scroll.visible_size-1]
             display_editable_text(
                 stdscr,
                 displayed_keyword,
-                self.filter.scroll.current - self.filter.scroll.offset,
+                self.filter.scroll.selected_index - self.filter.scroll.scroll_offset,
                 max_y-1,
                 8  # Position after "Search: "
             )
