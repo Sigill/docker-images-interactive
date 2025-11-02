@@ -165,7 +165,7 @@ class ScrollController:
         self.current: int = 0
         self.available_size: int = 0
 
-    def adjust_offset(self, available_size: int):
+    def adjust_offset(self, collection_size: int, available_size: int):
         self.available_size = available_size
 
         # Calculate scroll offset to keep selected item visible
@@ -173,6 +173,13 @@ class ScrollController:
             self.offset = self.current
         elif self.current >= self.offset + available_size:
             self.offset = self.current - available_size + 1
+
+        # Adjust offset if there is unused space in the collection
+        visible_items = min(available_size, collection_size - self.offset)
+        unused_space = available_size - visible_items
+        if unused_space > 0:
+            # Adjust offset up to use the unused space
+            self.offset = max(0, self.offset - unused_space)
 
         # Ensure scroll offset is not negative
         self.offset = max(0, self.offset)
@@ -301,7 +308,10 @@ class ListView:
         additional_shortcuts: str
     ) -> None:
         max_y, max_x = stdscr.getmaxyx()
-        self.__scroll.adjust_offset(available_size=max_y-2)  # Reserve 2 lines for header and instructions
+        self.__scroll.adjust_offset(
+            collection_size=len(data),
+            available_size=max_y-2,  # Reserve 2 lines for header and instructions
+        )
 
         if not data:
             stdscr.addstr(0, 0, empty_msg)
@@ -321,7 +331,10 @@ class ListView:
         if self.filter.editing:
             stdscr.addstr(max_y-1, 0, "Search: ")
 
-            self.filter.scroll.adjust_offset(max_x - 8 - 1)
+            self.filter.scroll.adjust_offset(
+                collection_size=len(self.filter.live_keyword) + 1,
+                available_size=max_x - 8 - 1,
+            )
             displayed_keyword = self.filter.live_keyword[self.filter.scroll.offset:]
             displayed_keyword = displayed_keyword[:self.filter.scroll.available_size-1]
             display_editable_text(
