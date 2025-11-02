@@ -186,22 +186,21 @@ class ScrollController:
 
     def adjust_offset(self, total_items: int, visible_size: int):
         self.visible_size = visible_size
+        # Keep the selected item visible and clamp the scroll offset
+        if total_items <= 0:
+            self.scroll_offset = 0
+            return
 
-        # Calculate scroll offset to keep selected item visible
+        # If selected is above the window, jump to it. If it's below, move the window so
+        # the selected item is the last visible line. Then clamp within valid bounds.
         if self.selected_index < self.scroll_offset:
             self.scroll_offset = self.selected_index
         elif self.selected_index >= self.scroll_offset + visible_size:
             self.scroll_offset = self.selected_index - visible_size + 1
 
-        # Adjust offset if there is unused space in the collection
-        visible_items = min(visible_size, total_items - self.scroll_offset)
-        unused_space = visible_size - visible_items
-        if unused_space > 0:
-            # Adjust offset up to use the unused space
-            self.scroll_offset = max(0, self.scroll_offset - unused_space)
-
-        # Ensure scroll offset is not negative
-        self.scroll_offset = max(0, self.scroll_offset)
+        max_offset = max(0, total_items - visible_size)
+        # Clamp scroll_offset to valid range
+        self.scroll_offset = max(0, min(self.scroll_offset, max_offset))
 
     def prev(self):
         self.selected_index = max(0, self.selected_index-1)
