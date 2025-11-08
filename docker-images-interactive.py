@@ -4,7 +4,7 @@ import curses.ascii
 import json
 import subprocess
 import sys
-from typing import Any, Callable, Final, Iterable, List, Sequence, Set, Tuple, TypedDict, Union
+from typing import Any, Callable, Final, Generator, Iterable, List, Sequence, Set, Tuple, TypedDict, Union
 
 
 # pylint: disable=too-few-public-methods
@@ -46,7 +46,7 @@ def run_docker_command(command: List[str]) -> List[Any]:
 
 # Utility to run 'docker images --format {{json .}}' and return list of ImageInfo
 def list_docker_images() -> List[ImageInfo]:
-    return run_docker_command(['docker', 'images', '--format', '{{json .}}', '--no-trunc'])
+    return run_docker_command(['docker', 'images', '--format', '{{json .}}', '--no-trunc', '--digests'])
 
 
 # Utility to run 'docker ps -a --format {{json .}}' and return list of ContainerInfo
@@ -58,17 +58,22 @@ def list_docker_containers() -> List[ContainerInfo]:
 def get_images_with_containers() -> List[Tuple[ImageInfo, List[ContainerInfo]]]:
     images = list_docker_images()
     containers = list_docker_containers()
-    repo_tag_to_image_id = {f"{img['Repository']}:{img['Tag']}": img['ID'] for img in images}
 
-    # Create a mapping from image ID to containers using that image
-    image_id_to_containers: dict[str, List[ContainerInfo]] = {}
-    for container in containers:
-        image_ref = container['Image']  # Can be repo:tag or the image ID
-        image_id = repo_tag_to_image_id.get(image_ref, image_ref)
-        image_id_to_containers.setdefault(image_id, []).append(container)
+    def find_associated_containers(img: ImageInfo) -> Generator[ContainerInfo, Any, None]:
+        image_names = [
+            f"{img['Repository']}:{img['Tag']}",
+            img['Repository']
+        ]
+        for container in containers:
+            container_image = container['Image']  # Can be repo:tag, repo, the image ID or a portion of it
+            if container_image in image_names or img['ID'].startswith(f"sha256:{container_image}"):
+                yield container
 
     # Create result list with image info and associated containers
-    return [(img, image_id_to_containers.get(img['ID'], [])) for img in images]
+    return [
+        (img, list(find_associated_containers(img)))
+        for img in images
+    ]
 
 
 def rell(value: str, sz: int):
