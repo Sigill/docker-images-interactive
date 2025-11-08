@@ -80,10 +80,10 @@ def lell(value: str, sz: int):
 
 
 def delete_image(img: ImageInfo):
-    if img['Repository'] != '<none>' and img['Tag'] != '<none>':
+    if img['Tag'] != '<none>':
         name = f"{img['Repository']}:{img['Tag']}"
     else:
-        name = img['ID']
+        name = f"{img['Repository']}@{img['Digest']}"
 
     # check=False, because docker rmi might fail if e.g. the image has already been removed from outside this script.
     subprocess.run(['docker', 'rmi', name], check=False, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
